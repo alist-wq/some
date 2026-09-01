@@ -285,6 +285,111 @@ Run:
 
 ---
 
+## TASK 002A — Establish Android App Build Baseline
+
+### Model
+Terra
+
+### Objective
+
+Create or validate the minimum scoped Android application/module and Gradle build configuration required before Android-platform implementation tasks such as TASK 019 can compile and run tests.
+
+This task exists to keep platform setup separate from feature tasks. TASK 019 must implement GNSS collection, not silently bootstrap the Android project.
+
+### Scope
+
+Create or validate only the Android build baseline:
+
+```text
+Android application module
+Kotlin Android plugin
+Android Gradle Plugin configuration
+Gradle wrapper
+compileSdk
+minSdk
+targetSdk
+application namespace/package
+AndroidManifest.xml
+main source set
+unit-test source set
+instrumentation-test source set
+baseline AndroidX dependencies
+```
+
+Configure Compose only if the repository architecture has already selected Compose. Do not introduce Compose solely for this task.
+
+### Allowed changes
+
+Only files required to establish a compilable Android application/module baseline, including where necessary:
+
+```text
+settings.gradle / settings.gradle.kts
+root build.gradle / build.gradle.kts
+gradle.properties
+gradle wrapper files
+version catalog
+app/build.gradle / app/build.gradle.kts
+app/src/main/AndroidManifest.xml
+minimal source-set placeholders required for compilation
+```
+
+Do not redesign the module architecture established by TASK 002.
+
+### Do not implement
+
+Do not implement any feature behavior, including:
+
+```text
+GNSS collection
+raw GNSS collection
+IMU/sensor collection
+OBD
+maps
+routing
+navigation
+dead reckoning
+spoof detection
+feature UI
+```
+
+A minimal application entry point may exist only if required for a valid Android build; it must contain no navigation feature logic.
+
+### Requirements
+
+- use versions compatible with the repository and current chosen toolchain
+- keep dependency additions minimal
+- document any version choice that was not already established by TASK 001/002
+- preserve module boundaries from `AGENTS.md`
+- shared/core models must remain usable from the Android app without circular dependencies
+- do not move feature code into the app module merely to make the build pass
+
+### Acceptance criteria
+
+- `./gradlew assembleDebug` succeeds
+- `./gradlew test` succeeds, or succeeds with no tests present
+- the Android application module resolves correctly in the Gradle project
+- the app module can reference the intended shared/core models
+- no circular module dependencies are introduced
+- subsequent Android tasks have a known module/source set in which to implement platform adapters
+
+### Tests
+
+Run at minimum:
+
+```text
+./gradlew assembleDebug
+./gradlew test
+```
+
+Report the exact commands and results.
+
+### Dependencies
+
+- TASK 001
+- TASK 002
+
+---
+
 # EPIC 1 — Shared Data Model
 
 ---
@@ -990,11 +1095,20 @@ Do not expose Android `Location` outside the GNSS module.
 
 Do not treat provider validity or reported accuracy as sufficient evidence of trust.
 
+TASK 019 must not create or redesign the Android build/module baseline. If TASK 002A is not complete, stop and report the unmet dependency.
+
 ### Tests
 
 Mock/provider-level tests where possible.
 
 Run Android build.
+
+### Dependencies
+
+- TASK 002
+- TASK 002A
+- TASK 003
+- TASK 004
 
 ---
 
@@ -3303,6 +3417,7 @@ Required tasks:
 
 ```text
 001–031
+including 002A
 092–094
 101
 ```
@@ -3499,6 +3614,8 @@ The recommended first execution queue is:
 001 Repository audit
 
 002 Module structure
+
+002A Android app build baseline
 
 003 Monotonic timestamp
 
