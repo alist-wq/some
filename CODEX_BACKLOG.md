@@ -73,6 +73,111 @@ Do not use Sol for routine implementation.
 
 ---
 
+# Threat-Model Rationale
+
+The navigation engine must assume that GNSS can fail in more than one way.
+
+The receiver may experience:
+
+```text
+NO SIGNAL
+JAMMED SIGNAL
+LARGE POSITION JUMP
+REMOTE LOCATION SPOOF
+GRADUAL POSITION DRIFT
+FALSE SPEED
+FALSE BEARING
+GNSS TIME ANOMALY
+APPARENTLY VALID BUT FALSE FIX
+```
+
+A publicly observed failure pattern in Ukraine includes devices reporting a remote position around Lima, Peru during GNSS interference. This backlog treats that as a canonical replay and benchmark fixture only.
+
+Production logic must never contain a Lima-, Peru-, Ukraine-, country-, or coordinate-specific spoof detector.
+
+The engineering question is always:
+
+```text
+Is this GNSS observation physically and probabilistically
+consistent with independent information about movement?
+```
+
+Independent evidence includes:
+
+```text
+previous trusted state
+monotonic elapsed time
+OBD vehicle speed
+gyroscope turns
+pedestrian steps
+pedestrian heading
+route progress
+map topology
+raw GNSS diagnostics
+```
+
+Remote continental teleports are relatively easy to detect. The harder long-term threat is a plausible nearby false trajectory or gradual drift. Passing a Lima-style test therefore does not establish robust spoof resistance.
+
+---
+
+# Project Invariants
+
+These requirements apply across all tasks.
+
+## Invariant 1 — GNSS validity is not trust
+
+An Android GNSS fix marked valid by the operating system is still only a measurement.
+
+It must not be treated as ground truth without trust evaluation.
+
+## Invariant 2 — Monotonic time is authoritative for fusion
+
+Sensor fusion and dead reckoning must use monotonic Android timing derived from `elapsedRealtimeNanos` semantics.
+
+GNSS time and wall-clock time may be logged and analyzed but must never become the primary propagation time base.
+
+## Invariant 3 — Preserve a trusted anchor
+
+Rejected GNSS observations must never replace the most recent trusted navigation anchor.
+
+## Invariant 4 — Dead reckoning starts from trusted state
+
+When GNSS becomes untrustworthy, vehicle DR or pedestrian PDR must continue from the last trusted navigation state, not from the most recent GNSS observation.
+
+## Invariant 5 — Remote spoof detection is generic
+
+Production logic must not special-case Lima, Peru, Ukraine, or any other named location.
+
+Geographic names and known coordinates may appear in:
+
+```text
+tests
+fixtures
+benchmarks
+documentation
+```
+
+but not as production spoof signatures.
+
+## Invariant 6 — Raw GNSS is evidence, not truth
+
+Raw measurements such as C/N0, AGC, pseudorange rate, and constellation status may be affected by interference or spoofing and must remain supporting evidence.
+
+## Invariant 7 — Do not overfit to spectacular failures
+
+A remote continental teleport is an easy detection case.
+
+The system must eventually be tested against:
+
+```text
+small offsets
+gradual drift
+parallel-road displacement
+plausible-speed false trajectories
+```
+
+---
+
 # EPIC 0 — Repository Foundation
 
 ---
@@ -248,13 +353,16 @@ bearing accuracy
 provider
 monotonic timestamp
 wall clock timestamp
+GNSS-derived time where available
 ```
+
+GNSS-derived time and wall-clock time must remain separate from the monotonic timestamp used for fusion.
 
 Nullable fields must reflect Android API availability.
 
 ### Acceptance criteria
 
-GNSS samples can be serialized for replay.
+GNSS samples can be serialized for replay and GNSS time can be corrupted in replay without altering monotonic timing.
 
 ---
 
@@ -388,6 +496,7 @@ barometer
 navigation mode
 route identifier
 events/markers
+GNSS-derived time separately from monotonic time
 ```
 
 ### Requirements
@@ -395,8 +504,10 @@ events/markers
 Format must:
 
 - preserve monotonic timestamps
+- preserve GNSS-derived time independently when available
 - support future schema evolution
 - support deterministic replay
+- allow GNSS corruption without changing IMU/OBD timing
 - avoid loading an entire large session into RAM
 
 ### Deliverable
@@ -434,6 +545,7 @@ Writer must:
 - periodically flush
 - properly close incomplete sessions
 - never block sensor callbacks with slow disk operations
+- preserve independent monotonic and GNSS/wall-time fields
 
 ### Tests
 
@@ -488,7 +600,7 @@ MAX_SPEED
 
 ### Acceptance criteria
 
-A recorded session can replay deterministically independent of actual wall-clock time.
+A recorded session can replay deterministically independent of actual wall-clock time and independent of GNSS-derived time.
 
 ---
 
@@ -511,7 +623,9 @@ REPLAY
 
 ### Acceptance criteria
 
-Recorded streams produce events in original timestamp order.
+Recorded streams produce events in original monotonic timestamp order.
+
+GNSS fields can later be corrupted independently without altering IMU/OBD event timing.
 
 ---
 
@@ -578,6 +692,112 @@ jump then recover
 
 ---
 
+## TASK 016A — Remote Location Spoof Simulator
+
+### Model
+Terra
+
+### Objective
+
+Extend the replay corruption framework to simulate an abrupt GNSS transition from the real navigation area to an arbitrary remote false location.
+
+The canonical initial benchmark target is Lima, Peru, but the implementation must support arbitrary coordinates.
+
+### Design rationale
+
+A remote false fix may still look like a valid GNSS observation to Android. The simulator must therefore exercise the trust engine rather than relying on provider validity flags.
+
+The purpose of the Lima fixture is reproducibility. It must not become a production special case.
+
+### Example
+
+```text
+REAL STREAM
+T+0 local
+T+1 local
+T+2 local
+
+SPOOF START
+
+T+3 remote target
+T+4 remote target
+T+5 remote target
+```
+
+Independent streams remain unchanged unless explicitly configured:
+
+```text
+OBD speed
+gyroscope
+accelerometer
+rotation vector
+barometer
+step data
+```
+
+### Configuration
+
+Support conceptually equivalent configuration:
+
+```yaml
+corruption:
+  type: remote_location_spoof
+  start_seconds: 270
+  duration_seconds: 600
+  target:
+    latitude: -12.0464
+    longitude: -77.0428
+  behavior: STATIC
+```
+
+Initial behaviors:
+
+```text
+STATIC
+CONTINUE_RELATIVE_MOTION
+```
+
+`STATIC` keeps false fixes near the configured target.
+
+`CONTINUE_RELATIVE_MOTION` transfers subsequent GNSS movement into the false geographic area.
+
+### Requirements
+
+Support:
+
+- arbitrary latitude/longitude
+- configurable start/duration
+- abrupt transition
+- configurable recovery
+- preservation of original session
+- deterministic replay
+
+Corruption must exist only in the replay layer.
+
+### Acceptance criteria
+
+1. Replay remains normal before spoof start.
+2. GNSS transitions to configured remote coordinates.
+3. IMU remains byte/semantically identical to original replay input.
+4. OBD remains identical to original replay input.
+5. Replay is deterministic.
+6. Source recording remains unchanged.
+
+### Tests
+
+Include:
+
+```text
+local → Lima
+local → arbitrary target 1000 km away
+spoof starts and ends
+spoof persists to replay end
+STATIC behavior
+CONTINUE_RELATIVE_MOTION behavior
+```
+
+---
+
 ## TASK 017 — Gradual GNSS Drift Simulator
 
 ### Model
@@ -629,6 +849,124 @@ Useful for trust-engine testing.
 
 ---
 
+## TASK 018A — GNSS Time Corruption Simulator
+
+### Model
+Terra
+
+### Objective
+
+Allow replay scenarios to corrupt GNSS-derived time independently from position.
+
+### Design rationale
+
+Spoofing may affect position and time differently. The navigation engine must remain stable even when GNSS time is wrong because propagation uses monotonic time.
+
+### Supported scenarios
+
+Implement:
+
+```text
+TIME_JUMP_FORWARD
+TIME_JUMP_BACKWARD
+TIME_OFFSET
+TIME_GRADUAL_DRIFT
+```
+
+Support combinations:
+
+```text
+position correct + GNSS time wrong
+position wrong + GNSS time correct
+position wrong + GNSS time wrong
+```
+
+### Critical requirement
+
+The simulator must never alter:
+
+```text
+MonotonicTimestamp
+elapsedRealtimeNanos-derived timing
+replay ordering
+IMU dt
+OBD dt
+PDR dt
+```
+
+unless a separate test explicitly targets those fields.
+
+### Acceptance criteria
+
+GNSS time corruption does not change:
+
+- vehicle distance integration
+- gyro integration
+- step integration
+- replay event ordering
+- route progress timing
+
+### Tests
+
+Verify a large GNSS time jump does not change deterministic propagation when GNSS position observations are otherwise identical.
+
+---
+
+## TASK 018B — Combined Remote Spoof Scenario
+
+### Model
+Luna
+
+### Objective
+
+Create reusable replay fixtures combining:
+
+```text
+remote GNSS position
+GNSS time anomaly
+GNSS bearing corruption
+GNSS velocity corruption
+```
+
+Each component must be independently configurable.
+
+### Canonical fixture
+
+Create benchmark fixture:
+
+```text
+LIMA-001
+```
+
+Behavior:
+
+```text
+normal navigation
+↓
+remote-location spoof begins
+↓
+GNSS reports Lima-area position
+↓
+GNSS time may become inconsistent
+↓
+GNSS speed/bearing may remain plausible or be corrupted
+↓
+spoof persists
+↓
+plausible local GNSS returns
+```
+
+### Prohibition
+
+No production algorithm may contain logic equivalent to:
+
+```text
+if location is Lima:
+    reject GNSS
+```
+
+---
+
 # EPIC 4 — Android GNSS Collection
 
 ---
@@ -649,6 +987,8 @@ Use Android location APIs.
 Convert framework objects immediately into internal models.
 
 Do not expose Android `Location` outside the GNSS module.
+
+Do not treat provider validity or reported accuracy as sufficient evidence of trust.
 
 ### Tests
 
@@ -1326,6 +1666,164 @@ confidence
 
 ---
 
+## TASK 050A — Last Trusted Position Anchor
+
+### Model
+Terra
+
+### Objective
+
+Create an explicit representation of the most recent navigation state established while GNSS was sufficiently trustworthy.
+
+Suggested model:
+
+```kotlin
+data class TrustedPositionAnchor(
+    val position: GeoPoint,
+    val timestamp: MonotonicTimestamp,
+    val headingDegrees: Double?,
+    val routeProgressMeters: Double?,
+    val navigationMode: NavigationMode,
+    val confidence: Double
+)
+```
+
+Exact fields may adapt to existing project models.
+
+### Design rationale
+
+If a GNSS observation suddenly teleports to a remote location, the navigation system needs a stable local origin from which DR/PDR can continue. The last trusted anchor provides that origin.
+
+### Requirements
+
+- update anchor only when trust policy allows it
+- rejected GNSS never replaces anchor
+- questionable GNSS does not replace anchor unless explicitly permitted by policy
+
+### Acceptance criteria
+
+Remote GNSS observations cannot move the trusted anchor.
+
+### Tests
+
+```text
+trusted → trusted: anchor updates
+trusted → questionable: policy followed
+trusted → rejected: anchor unchanged
+trusted local → Lima spoof: anchor remains local
+```
+
+---
+
+## TASK 050B — Geographic Continuity Evidence
+
+### Model
+Terra
+
+### Objective
+
+Generate GNSS trust evidence based on whether a new position is physically reachable from the last trusted navigation state.
+
+### Inputs
+
+Use where available:
+
+```text
+last trusted position
+new GNSS position
+monotonic elapsed time
+navigation mode
+recent speed estimate
+position uncertainty
+```
+
+### Design rationale
+
+This detector provides a generic physical consistency test. It rejects impossible transitions because of displacement and elapsed time, not because of destination coordinates.
+
+### Requirements
+
+Different motion modes may use configurable conservative envelopes:
+
+```text
+PEDESTRIAN
+VEHICLE
+UNKNOWN
+```
+
+Thresholds must be configurable and documented.
+
+Output `GnssTrustEvidence`; do not directly modify navigation position.
+
+### Tests
+
+```text
+pedestrian + 5 m movement → plausible
+vehicle + 30 m movement → plausible
+stationary + small GNSS noise → plausible
+local → Lima in 1 s → impossible
+100 km jump in 1 s → impossible
+moderate movement over sufficient elapsed time → evaluated correctly
+```
+
+---
+
+## TASK 050C — Hard Innovation Gate
+
+### Model
+Sol
+
+### Objective
+
+Add a conservative safety boundary preventing catastrophically implausible GNSS observations from contaminating estimator state before the full trust state machine reacts.
+
+### Concept
+
+```text
+GNSS observation
+      ↓
+geographic continuity / innovation check
+      ↓
+catastrophically impossible?
+  YES                 NO
+   ↓                   ↓
+block correction     normal trust evaluation
+```
+
+### Design rationale
+
+Trust aggregation may intentionally be gradual and hysteretic. A continental teleport should not get even one estimator update simply because the state machine needs multiple samples to transition.
+
+### Requirements
+
+The GNSS sample must still be:
+
+- recorded
+- visible in diagnostics
+- passed to trust analysis
+
+Only state correction is blocked.
+
+The gate must account for uncertainty and use deliberately conservative configurable thresholds.
+
+### Tests
+
+Include:
+
+```text
+normal GNSS noise
+normal vehicle movement
+normal pedestrian movement
+tunnel exit correction
+large urban multipath error
+100 km teleport
+local → Lima teleport
+```
+
+False hard rejection of plausible observations is a test failure.
+
+---
+
 ## TASK 050 — GNSS Trust Framework
 
 ### Model
@@ -1408,6 +1906,55 @@ GNSS trajectory distance
 Use configurable windows.
 
 Avoid false positives around curves.
+
+---
+
+## TASK 053A — Independent Motion vs Remote GNSS Evidence
+
+### Model
+Sol
+
+### Objective
+
+Strengthen trust evaluation for cases where GNSS remains internally plausible but disagrees with independent local motion.
+
+Compare rolling-window evidence from:
+
+```text
+OBD distance
+gyro turns
+PDR distance
+PDR turns
+route progress
+```
+
+against the GNSS trajectory.
+
+### Design rationale
+
+A spoofed signal may report believable speed, bearing, accuracy, satellite status, and a smooth trajectory. Internal GNSS consistency therefore does not prove physical consistency.
+
+### Vehicle example
+
+```text
+OBD: 172 m travelled
+gyro: one right turn
+route: local urban road
+GNSS: remote false trajectory
+```
+
+### Pedestrian example
+
+```text
+steps: 143
+estimated distance: ~100 m
+observed turn: left
+GNSS: trajectory inconsistent with local movement
+```
+
+### Acceptance criteria
+
+Detection does not depend on GNSS reporting an invalid fix.
 
 ---
 
@@ -1494,12 +2041,15 @@ Inputs may include:
 
 ```text
 position jump
+geographic continuity
 vehicle speed mismatch
 distance mismatch
+independent motion mismatch
 heading mismatch
 route mismatch
 C/N0 indicators
 AGC indicators
+GNSS time anomalies
 ```
 
 ### Requirements
@@ -1530,7 +2080,87 @@ Implement hysteresis and sustained-observation requirements.
 
 ---
 
+## TASK 059A — GNSS Time Anomaly Evidence
+
+### Model
+Terra
+
+### Objective
+
+Detect suspicious GNSS-derived time changes without allowing them to affect sensor-fusion timing.
+
+### Evidence examples
+
+```text
+large sudden GNSS time jump
+GNSS time moving backward
+GNSS time inconsistent with recent GNSS clock state
+large unexpected GNSS/system-time disagreement
+```
+
+### Critical requirement
+
+GNSS time anomalies produce trust evidence only.
+
+They must never replace monotonic timing used by:
+
+```text
+fusion
+dead reckoning
+OBD integration
+IMU integration
+PDR
+replay
+```
+
+### Acceptance criteria
+
+TASK 018A corruption changes trust diagnostics but not propagation timing.
+
+---
+
 # EPIC 12 — Hybrid Vehicle Navigation
+
+---
+
+## TASK 060A — Trusted Anchor Propagation Start
+
+### Model
+Sol
+
+### Objective
+
+Ensure dead reckoning transitions from the last trusted navigation state rather than from a newly rejected GNSS observation.
+
+### Required behavior
+
+```text
+trusted local position
+↓
+GNSS questionable
+↓
+GNSS remote teleport
+↓
+GNSS rejected
+↓
+DR continues from trusted local state
+```
+
+### Forbidden behavior
+
+```text
+trusted local
+↓
+GNSS Lima
+↓
+navigation state becomes Lima
+↓
+DR starts in Lima
+```
+
+### Acceptance criteria
+
+`LIMA-001` never initializes dead reckoning from the false remote location.
 
 ---
 
@@ -1550,6 +2180,8 @@ GNSS trust
 GNSS accuracy
 current DR uncertainty
 ```
+
+The hard innovation gate must run before any correction is applied.
 
 ---
 
@@ -1571,6 +2203,8 @@ increase uncertainty
 
 GNSS samples must still be recorded.
 
+Rejected samples must not update the trusted anchor.
+
 ---
 
 ## TASK 062 — GNSS Recovery Integration
@@ -1583,6 +2217,8 @@ Sol
 Implement gradual re-entry of GNSS after rejection.
 
 Must not snap immediately to first candidate fix.
+
+Remote spoof recovery must require sustained consistency with the local DR/map-matched state.
 
 ---
 
@@ -1689,6 +2325,8 @@ cadence relationship
 ```
 
 Freeze calibration when GNSS trust becomes questionable.
+
+Remote-spoofed GNSS must never calibrate stride length.
 
 ---
 
@@ -1825,6 +2463,8 @@ pedestrian heading
 ```
 
 No map matching yet.
+
+PDR must initialize from the last trusted local navigation anchor when GNSS is rejected.
 
 ---
 
@@ -2075,6 +2715,8 @@ confidence label
 
 Do not show an exact blue dot when confidence is LOW.
 
+A remote spoofed GNSS coordinate must never cause the visible navigation marker to jump before trust evaluation.
+
 ---
 
 ## TASK 087 — Diagnostics Screen
@@ -2089,6 +2731,8 @@ Display development diagnostics:
 ```text
 GNSS trust
 trust evidence
+hard innovation gate status
+trusted anchor
 OBD rate
 vehicle speed
 gyro yaw rate
@@ -2096,6 +2740,7 @@ step cadence
 route candidate probabilities
 position uncertainty
 last trusted GNSS
+GNSS time anomaly evidence
 ```
 
 ---
@@ -2125,6 +2770,8 @@ corruption:
   duration: 420
 ```
 
+Scenario format must support combined position/time/speed/bearing corruption.
+
 ---
 
 ## TASK 089 — Benchmark Metrics Engine
@@ -2145,6 +2792,8 @@ GNSS rejection delay
 GNSS false rejection
 recovery time
 low confidence duration
+maximum spoof-induced navigation displacement
+trusted-anchor movement during rejection
 ```
 
 ---
@@ -2189,13 +2838,130 @@ Example:
 
 ```text
 wrong branches > 0 → FAIL
-
 correct route < 95% → FAIL
-
 mean progress error increases >20% → FAIL
 ```
 
 Thresholds must remain configurable.
+
+---
+
+## TASK 091A — Canonical Remote Spoof Benchmark
+
+### Model
+Terra
+
+### Objective
+
+Add `LIMA-001` as a canonical regression benchmark.
+
+### Design rationale
+
+This reproduces a known remote-location failure pattern but validates generic physical-consistency defenses rather than location-specific logic.
+
+### Scenario
+
+```text
+trusted local navigation
+↓
+remote GNSS spoof begins
+↓
+GNSS reports Lima-area position
+↓
+independent local motion continues
+↓
+spoof persists
+↓
+plausible local GNSS returns
+```
+
+Run against vehicle and pedestrian recordings when both datasets become available.
+
+### Required metrics
+
+```text
+did navigation position enter spoof area?
+time to QUESTIONABLE
+time to REJECTED
+maximum spoof-induced navigation displacement
+route progress error
+wrong route branches
+dead-reckoning continuity
+GNSS recovery time
+trusted-anchor movement during spoof
+```
+
+### Mandatory acceptance criteria
+
+```text
+Navigation enters Lima: NO
+Trusted anchor enters Lima: NO
+DR initialized from spoof position: NO
+Monotonic propagation timing corrupted: NO
+GNSS samples remain recorded: YES
+```
+
+---
+
+## TASK 091B — Remote Spoof Matrix Benchmark
+
+### Model
+Terra
+
+### Objective
+
+Prevent overfitting specifically to the Lima fixture.
+
+Run equivalent remote-location corruptions using multiple displacement classes:
+
+```text
+10 km
+50 km
+500 km
+1000+ km
+different country
+different continent
+```
+
+### Acceptance criteria
+
+Results are governed by physical consistency and uncertainty, not target coordinates.
+
+---
+
+## TASK 091C — Near-Spoof Benchmark
+
+### Model
+Sol
+
+### Objective
+
+Test the harder case where false GNSS remains geographically near the real position.
+
+### Scenarios
+
+```text
+50 m displacement
+100 m displacement
+250 m displacement
+500 m displacement
+1 km displacement
+```
+
+Include:
+
+```text
+instant offset
+gradual drift
+parallel-road displacement
+plausible-speed drift
+```
+
+### Design rationale
+
+A remote teleport is easy to detect. Nearby gradual spoofing is more likely to challenge route matching and fusion because the false trajectory may remain physically plausible for significant periods.
+
+TASK 091C is MVP+ and should not block the first interference prototype, but it is required before claiming general spoof robustness.
 
 ---
 
@@ -2242,6 +3008,7 @@ Useful for marking:
 
 ```text
 known GPS failure
+suspected spoof event
 intersection
 wrong navigation
 route deviation
@@ -2382,7 +3149,9 @@ Terra
 
 Persist enough session/navigation state to recover gracefully after Android process termination.
 
-Do not blindly resume dead reckoning from stale state without checking timestamps.
+Do not blindly resume dead reckoning from stale state without checking monotonic/session timestamps.
+
+Do not restore a previously rejected GNSS coordinate as a trusted anchor.
 
 ---
 
@@ -2483,6 +3252,47 @@ truncated file
 
 ---
 
+## TASK 104A — Interference Event Metadata
+
+### Model
+Luna
+
+### Objective
+
+Extend dataset metadata to describe suspected, observed, or injected GNSS interference.
+
+Suggested fields:
+
+```text
+interferenceObserved
+interferenceType
+eventStart
+eventEnd
+reportedFalseLocation
+GNSS time anomaly
+device behavior
+manual notes
+classification confidence
+```
+
+### Classification values
+
+Support at least:
+
+```text
+UNKNOWN
+SUSPECTED_JAMMING
+SUSPECTED_SPOOFING
+KNOWN_TEST_INJECTION
+NORMAL
+```
+
+### Design rationale
+
+An abnormal navigation trace alone is insufficient evidence to claim spoofing. Dataset metadata must preserve uncertainty about event classification.
+
+---
+
 # EPIC 25 — First Integrated Milestones
 
 ---
@@ -2512,6 +3322,8 @@ OBD speed
 ```
 
 to a replayable session.
+
+The recorded model keeps monotonic timing distinct from GNSS/wall-clock time.
 
 ---
 
@@ -2574,22 +3386,56 @@ typical route progress error <50 m
 Required tasks:
 
 ```text
-050–063
-015–018
+015
+016
+016A
+017
+018
+018A
+018B
+
+050A
+050B
+050C
+050–059
+059A
+
+060A
+060–063
+
+088–091
+091A
+091B
 ```
 
-Success criteria:
+TASK 091C is MVP+ and is not a blocker for the first interference prototype.
 
-System detects obvious GNSS inconsistencies and rejects inappropriate corrections.
+### Success criteria
 
-Must support:
+System must handle:
 
 ```text
-large jump
-gradual drift
-false velocity
-false bearing
 GNSS outage
+large local jump
+remote geographic teleport
+Lima-style remote spoof fixture
+gradual GNSS drift
+false GNSS velocity
+false GNSS bearing
+GNSS time anomaly
+return of plausible local GNSS
+```
+
+A catastrophically implausible GNSS observation must not become navigation state before trust evaluation/rejection completes.
+
+Mandatory remote-spoof behavior:
+
+```text
+navigation remains local
+trusted anchor remains local
+DR/PDR origin remains local
+monotonic fusion timing remains stable
+spoof samples remain logged for diagnostics
 ```
 
 ---
@@ -2613,6 +3459,8 @@ Initial target:
 500 m minimum
 >90% correct route branch
 ```
+
+Pedestrian navigation must continue from the last trusted local anchor when GNSS becomes rejected.
 
 ---
 
@@ -2701,6 +3549,20 @@ Record real data.
 
 The next major decisions should use actual Android sensor traces rather than assumptions.
 
+After the base replay engine exists, implement spoof simulation before GNSS trust work:
+
+```text
+015 GNSS outage
+016 GNSS jump
+016A Remote location spoof
+017 Gradual drift
+018 Velocity/bearing corruption
+018A GNSS time corruption
+018B Combined remote spoof fixture
+```
+
+Then proceed to the trust epic.
+
 ---
 
 # First Important Gate
@@ -2756,6 +3618,155 @@ stairs if available
 ```
 
 Do not train/tune pose logic exclusively from synthetic sensor data.
+
+---
+
+# Remote-Spoof Gate
+
+Before claiming Milestone D complete, run at minimum:
+
+```text
+LIMA-001
+remote spoof matrix
+large local jump
+gradual drift
+GNSS time anomaly
+```
+
+Passing only `LIMA-001` is insufficient because continental teleports are easier to detect than nearby plausible spoof trajectories.
+
+---
+
+# Canonical LIMA-001 State Transition
+
+Expected behavior:
+
+```text
+START
+
+GNSS TRUSTED
+navigation local
+
+↓
+
+remote spoof starts
+
+↓
+
+GNSS reports Lima-area position
+
+↓
+
+geographic continuity:
+FAIL
+
+↓
+
+hard innovation gate:
+BLOCK GNSS CORRECTION
+
+↓
+
+GNSS trust:
+QUESTIONABLE
+→
+REJECTED
+
+↓
+
+trusted anchor:
+UNCHANGED
+
+↓
+
+VEHICLE:
+OBD + gyro + route DR
+
+or
+
+PEDESTRIAN:
+steps + gyro + route PDR
+
+↓
+
+navigation remains local
+
+↓
+
+plausible local GNSS returns
+
+↓
+
+RECOVERING
+
+↓
+
+sustained consistency
+
+↓
+
+HYBRID
+
+↓
+
+TRUSTED
+```
+
+Mandatory assertions:
+
+```text
+navigation_position_remote == false
+trusted_anchor_remote == false
+spoof_used_as_dr_origin == false
+monotonic_timing_corrupted == false
+gnss_samples_recorded == true
+```
+
+---
+
+# Completed Task Review Policy
+
+Do not automatically rerun completed tasks after threat-model changes.
+
+For each completed task ask:
+
+```text
+Does the new requirement change the task's
+public model, interface, persistence format, or timing assumptions?
+
+YES → review affected implementation
+NO  → leave completed task untouched
+```
+
+Potential review candidates for the remote-spoof update:
+
+```text
+003 Monotonic Timestamp
+004 GNSS Sample Model
+005 Raw GNSS Models
+009 Sensor Session Format
+010 Session Writer
+011 Session Reader
+012 Replay Clock
+013 Replay Engine
+```
+
+Review does not mean reimplementation.
+
+Confirm only that:
+
+```text
+GNSS time is separate from monotonic time
+raw observations are preserved
+replay can modify GNSS independently of IMU/OBD timestamps
+session format can represent test GNSS-time corruption
+```
+
+If these conditions already hold:
+
+```text
+NO CHANGE REQUIRED
+```
 
 ---
 
@@ -2962,6 +3973,46 @@ criterion is met.
 
 ---
 
+# Remote-Spoof Impact Audit Prompt
+
+Use this if tasks were completed before the remote-spoof requirements were added:
+
+```text
+Read AGENTS.md and CODEX_BACKLOG.md.
+
+Review the Remote GNSS Spoofing requirements.
+
+Do not implement new features yet.
+
+Inspect all tasks that have already been completed and determine
+whether the new requirements invalidate or require changes to any
+existing implementation.
+
+Specifically verify:
+
+1. sensor fusion uses monotonic timestamps;
+2. GNSS-derived time is stored separately;
+3. replay can corrupt GNSS independently of IMU and OBD;
+4. rejected GNSS cannot overwrite trusted navigation state;
+5. no component assumes Android GNSS fixes are always trustworthy.
+
+Produce:
+
+docs/remote-spoof-impact-audit.md
+
+For every completed task classify it:
+
+NO CHANGE
+MINOR CHANGE
+REQUIRES UPDATE
+
+Explain why.
+
+Do not modify production code during this audit.
+```
+
+---
+
 # Final Principle
 
 The project should be developed as:
@@ -2986,6 +4037,20 @@ WRITE ALGORITHM
 DRIVE AROUND
 ↓
 IT LOOKS OK
+```
+
+For GNSS integrity specifically:
+
+```text
+GNSS
+↓
+Is this observation consistent with independently observed movement?
+↓
+YES                     NO
+↓                       ↓
+weighted fusion         distrust
+                        ↓
+                        DR/PDR from trusted anchor
 ```
 
 Codex should optimize against deterministic evidence whenever possible.
