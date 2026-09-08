@@ -1,0 +1,4 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- Local deterministic instrumentation feeds only; release remains HTTPS/WSS-only. -->
+    <application android:usesCleartextTraffic="true" />
+</manifest>

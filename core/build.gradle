@@ -1,0 +1,28 @@
+plugins {
+    id 'java-library'
+    id 'org.jetbrains.kotlin.jvm'
+}
+java { toolchain { languageVersion = JavaLanguageVersion.of(22) } }
+tasks.withType(JavaCompile).configureEach { options.release = 17 }
+tasks.withType(org.jetbrains.kotlin.gradle.tasks.KotlinCompile).configureEach {
+    compilerOptions.jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
+}
+
+dependencies {
+    implementation 'uk.me.g4dpz:predict4java:1.2.2'
+    testImplementation 'org.jetbrains.kotlin:kotlin-test-junit5'
+}
+
+test { useJUnitPlatform() }
+
+tasks.register('runNavigationBenchmark', JavaExec) {
+    group = 'verification'
+    description = 'Runs a navigation benchmark using a recorded session, scenario, and algorithm configuration.'
+    classpath = sourceSets.main.runtimeClasspath
+    mainClass = 'com.example.navigation.benchmark.NavigationBenchmarkCli'
+    args(
+        providers.gradleProperty('benchmarkSession').orNull ?: '',
+        providers.gradleProperty('benchmarkScenario').orNull ?: '',
+        providers.gradleProperty('benchmarkAlgorithmConfig').orNull ?: ''
+    )
+}

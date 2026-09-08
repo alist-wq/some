@@ -1,0 +1,139 @@
+# Android SDK and machine-local Android state
+local.properties
+.android-sdk/
+.android-user/
+.android-user-*/
+captures/
+.externalNativeBuild/
+.cxx/
+
+# Gradle and Kotlin caches
+.gradle/
+.gradle-user/
+.kotlin/
+**/.gradle/
+**/.kotlin/
+
+# Build outputs
+build/
+**/build/
+out/
+**/out/
+bin/
+gen/
+obj/
+*.apk
+*.aab
+*.ap_
+*.aar
+*.dex
+*.class
+*.hprof
+*.mapping
+
+# Native build products
+*.so
+*.o
+*.obj
+*.dylib
+
+# Signing keys and credentials
+*.jks
+*.keystore
+*.p12
+*.pfx
+*.pem
+*.key
+*.der
+keystore.properties
+signing.properties
+secrets.properties
+google-services.json
+
+# Environment and local configuration
+.env
+.env.*
+!.env.example
+*.local
+*.local.properties
+
+# Recorded navigation data and exported diagnostics may contain location history
+*.navsession
+*.navsession.*
+renav-log-*.txt
+session-*.txt
+session-*.json
+session-*.csv
+recordings/
+sessions/
+exports/
+diagnostics/
+
+# Permit intentionally anonymized, reviewed replay fixtures in test resources
+!**/src/test/resources/**/*.navsession
+!**/src/androidTest/resources/**/*.navsession
+!**/src/test/resources/**/*.json
+!**/src/androidTest/resources/**/*.json
+
+# Logs, reports, and temporary runtime files
+*.log
+*.log.*
+*.trace
+*.tmp
+*.temp
+*.bak
+*.swp
+*.swo
+hs_err_pid*
+replay_pid*
+lint-results*.html
+lint-results*.xml
+test-results/
+reports/
+
+# Android Studio / IntelliJ IDEA
+.idea/
+*.iml
+*.ipr
+*.iws
+navigation.xml
+assetWizardSettings.xml
+
+# Visual Studio Code and local editor state
+.vscode/
+*.code-workspace
+.fleet/
+
+# Windows
+Thumbs.db
+Thumbs.db:encryptable
+Desktop.ini
+$RECYCLE.BIN/
+*.lnk
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+
+# Linux desktop and filesystem metadata
+*~
+.directory
+.Trash-*
+
+# Coverage and profiling output
+.coverage
+coverage/
+*.ec
+*.exec
+*.profraw
+*.profdata
+
+# Archives generated for distribution or local transfer
+*.zip
+*.tar
+*.tar.gz
+*.tgz
+*.7z
+
