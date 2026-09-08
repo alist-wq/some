@@ -28,8 +28,7 @@ jobs:
           trap 'rm -f "$key_file"' EXIT
           printf '%s' "$RENAV_BROUTER_ED25519_PRIVATE_KEY" > "$key_file"
           chmod 600 "$key_file"
-          openssl pkey -in "$key_file" -noout
-          fingerprint="$(openssl pkey -in "$key_file" -pubout -outform DER | openssl dgst -sha256 -r | cut -d ' ' -f 1)"
+          fingerprint="$(ssh-keygen -lf "$key_file" -E sha256 | awk '{print $2}')"
           echo "public_key_sha256=$fingerprint" >> "$GITHUB_OUTPUT"
       - name: Confirm release authority
         env:
