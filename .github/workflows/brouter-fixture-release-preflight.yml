@@ -1,0 +1,45 @@
+name: BRouter fixture release preflight
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: Verify protected signing and release authority without publishing an artifact
+        required: true
+        default: true
+        type: boolean
+
+permissions:
+  contents: write
+
+jobs:
+  verify-release-authority:
+    environment: brouter-fixture-release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require protected signing key
+        env:
+          RENAV_BROUTER_ED25519_PRIVATE_KEY: ${{ secrets.RENAV_BROUTER_ED25519_PRIVATE_KEY }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$RENAV_BROUTER_ED25519_PRIVATE_KEY"
+          key_file="$(mktemp)"
+          trap 'rm -f "$key_file"' EXIT
+          printf '%s' "$RENAV_BROUTER_ED25519_PRIVATE_KEY" > "$key_file"
+          chmod 600 "$key_file"
+          openssl pkey -in "$key_file" -noout
+          fingerprint="$(openssl pkey -in "$key_file" -pubout -outform DER | openssl dgst -sha256 -r | cut -d ' ' -f 1)"
+          echo "public_key_sha256=$fingerprint" >> "$GITHUB_OUTPUT"
+      - name: Confirm release authority
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh api "repos/${GITHUB_REPOSITORY}" --jq '.permissions.push' | grep -qx true
+      - name: Confirm dry-run only
+        if: ${{ inputs.dry_run != true }}
+        run: |
+          echo "Artifact publication is intentionally unavailable until TASK 152 provides verified package outputs."
+          exit 1
