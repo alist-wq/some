@@ -36,7 +36,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          gh api "repos/${GITHUB_REPOSITORY}" --jq '.permissions.push' | grep -qx true
+          test -n "$GH_TOKEN"
+          gh api "repos/${GITHUB_REPOSITORY}/releases?per_page=1" >/dev/null
       - name: Confirm dry-run only
         if: ${{ inputs.dry_run != true }}
         run: |
