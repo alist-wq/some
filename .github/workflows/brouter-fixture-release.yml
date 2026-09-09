@@ -1,0 +1,65 @@
+name: Publish signed Kharkiv BRouter fixture
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_run_id:
+        description: Successful brouter-fixture-build workflow run ID
+        required: true
+        type: string
+      package_version:
+        description: Immutable RENAV package version
+        required: true
+        default: 2026.09.04-1
+        type: string
+
+permissions:
+  actions: read
+  contents: write
+
+jobs:
+  publish:
+    environment: brouter-fixture-release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download both clean build artifacts
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh run download "${{ inputs.source_run_id }}" --name ua-kharkiv-pedestrian-one --dir one
+          gh run download "${{ inputs.source_run_id }}" --name ua-kharkiv-pedestrian-two --dir two
+          diff -ru one two
+      - name: Verify and create canonical manifest
+        run: |
+          set -euo pipefail
+          python3 tools/brouter/write_release_manifest.py --artifacts one --package-version "${{ inputs.package_version }}" --map-compatibility-version openfreemap-2026-09 --output one/manifest.json
+      - name: Sign manifest and derive public verifier
+        env:
+          RENAV_BROUTER_ED25519_PRIVATE_KEY: ${{ secrets.RENAV_BROUTER_ED25519_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          test -n "$RENAV_BROUTER_ED25519_PRIVATE_KEY"
+          key_file="$(mktemp)"
+          trap 'rm -f "$key_file"' EXIT
+          printf '%s' "$RENAV_BROUTER_ED25519_PRIVATE_KEY" > "$key_file"
+          chmod 600 "$key_file"
+          ssh-keygen -Y sign -f "$key_file" -n renav-brouter-manifest one/manifest.json
+          ssh-keygen -y -f "$key_file" > one/renav-brouter-ed25519.pub
+          ssh-keygen -lf one/renav-brouter-ed25519.pub -E sha256 | awk '{print $2}' > one/renav-brouter-ed25519.fingerprint
+      - name: Verify signature and release evidence
+        run: |
+          set -euo pipefail
+          fingerprint="$(cat one/renav-brouter-ed25519.fingerprint)"
+          test "$fingerprint" = "SHA256:ou3kmrFldZu4294D28WQKE2x2IE8/drYMBJnVEzfU5A"
+          printf 'renav-brouter-fixture %s\n' "$(cat one/renav-brouter-ed25519.pub)" > one/allowed-signers
+          ssh-keygen -Y verify -f one/allowed-signers -I renav-brouter-fixture -n renav-brouter-manifest -s one/manifest.json.sig < one/manifest.json
+      - name: Publish immutable release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag="brouter-ua-kharkiv-pedestrian-${{ inputs.package_version }}"
+          ! gh release view "$tag" >/dev/null 2>&1
+          gh release create "$tag" one/E35_N50.rd5 one/lookups.dat one/renav-pedestrian.brf one/regression.json one/manifest.json one/manifest.json.sig one/renav-brouter-ed25519.pub one/renav-brouter-ed25519.fingerprint --title "RENAV Kharkiv pedestrian ${{ inputs.package_version }}" --notes "Signed offline BRouter pedestrian fixture. © OpenStreetMap contributors, ODbL 1.0."

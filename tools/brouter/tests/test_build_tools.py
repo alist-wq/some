@@ -15,6 +15,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[3]
 NORMALISE = ROOT / "tools/brouter/normalise_rd5_timestamp.py"
 EVIDENCE = ROOT / "tools/brouter/write_build_evidence.py"
+RELEASE_MANIFEST = ROOT / "tools/brouter/write_release_manifest.py"
 VERIFY_INPUT = ROOT / "tools/brouter/verify_locked_input.py"
 
 
@@ -79,6 +80,34 @@ class BuildToolsTest(unittest.TestCase):
         self.assertNotEqual(subprocess.run([sys.executable, VERIFY_INPUT, lock, pbf]).returncode, 0)
         mutable_lock = self.write_lock(valid_hash, "https://example.invalid/ukraine-latest.osm.pbf")
         self.assertNotEqual(subprocess.run([sys.executable, VERIFY_INPUT, mutable_lock, pbf]).returncode, 0)
+
+    def test_release_manifest_requires_exact_evidence_and_artifacts(self) -> None:
+        artifacts = self.directory / "artifacts"
+        artifacts.mkdir()
+        lookup, profile, segment = artifacts / "lookups.dat", artifacts / "renav-pedestrian.brf", artifacts / "E35_N50.rd5"
+        lookup.write_bytes(b"lookup")
+        profile.write_bytes(b"profile")
+        segment.write_bytes(b"segment")
+        regression = artifacts / "regression.json"
+        regression.write_text('{"geometrySha256":"abc","pointCount":2}\n', encoding="utf-8")
+        evidence = {
+            "regionId": "ua-kharkiv-pedestrian",
+            "source": {"pbfUrl": "https://example.invalid/ukraine-260901.osm.pbf", "pbfDateUtc": "2026-09-04T11:12:00Z", "pbfSha256": "a" * 64},
+            "brouterRevision": "d5c0a75d29b5a036525fd5e9466a6376ee54cc3e",
+            "artifacts": [
+                {"name": path.name, "sha256": hashlib.sha256(path.read_bytes()).hexdigest(), "bytes": path.stat().st_size}
+                for path in (lookup, profile, segment)
+            ],
+            "regression": json.loads(regression.read_text()),
+        }
+        (artifacts / "build-evidence.json").write_text(json.dumps(evidence), encoding="utf-8")
+        output = artifacts / "manifest.json"
+        subprocess.run([sys.executable, RELEASE_MANIFEST, "--artifacts", artifacts, "--package-version", "2026.09.04-1", "--map-compatibility-version", "openfreemap-2026-09", "--output", output], check=True)
+        manifest = json.loads(output.read_text())
+        self.assertEqual("ua-kharkiv-pedestrian", manifest["regionId"])
+        self.assertEqual(["E35_N50.rd5"], [entry["name"] for entry in manifest["segments"]])
+        segment.write_bytes(b"corrupt")
+        self.assertNotEqual(subprocess.run([sys.executable, RELEASE_MANIFEST, "--artifacts", artifacts, "--package-version", "2026.09.04-1", "--map-compatibility-version", "openfreemap-2026-09", "--output", output]).returncode, 0)
 
 
 if __name__ == "__main__":
