@@ -1,0 +1,54 @@
+# RENAV pedestrian baseline profile, version 1.
+# This is intentionally conservative: it permits pedestrian-accessible ways,
+# excludes motorways, and uses BRouter's deterministic profile language.
+
+---context:global
+
+assign validForFoot 1
+assign downhillcost 0
+assign downhillcutoff 1.5
+assign uphillcost 0
+assign uphillcutoff 1.5
+assign turnInstructionMode 1
+
+---context:way
+
+assign defaultaccess
+  switch access=
+    switch motorroad=yes false
+      switch highway=motorway|motorway_link false true
+    switch access=private|no false true
+
+assign footaccess
+  switch foot=
+    defaultaccess
+    not foot=private|no|use_sidepath
+
+assign costfactor
+  switch and highway= not route=ferry 100000
+  switch route=ferry 5.67
+  switch highway=motorway|motorway_link 100000
+  switch highway=proposed|abandoned|construction 100000
+  switch footaccess 1 100000
+
+assign priorityclassifier
+  if highway=primary then 26
+  else if highway=secondary then 24
+  else if highway=tertiary then 22
+  else if highway=residential|living_street|service then 6
+  else if highway=footway|path|pedestrian|steps then 4
+  else 0
+
+assign classifiermask 0
+
+---context:node
+
+assign defaultaccess
+  switch access= 1
+    switch access=private|no 0 1
+
+assign footaccess
+  switch foot= defaultaccess
+    not foot=private|no
+
+assign initialcost switch footaccess 0 1000000

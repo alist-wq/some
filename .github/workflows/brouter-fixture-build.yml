@@ -1,0 +1,73 @@
+name: BRouter Kharkiv fixture build
+
+on:
+  pull_request:
+    paths:
+      - 'tools/brouter/**'
+      - '.github/workflows/brouter-fixture-build.yml'
+  workflow_dispatch:
+    inputs:
+      run_full_build:
+        description: Download the locked PBF and run both clean map-creator builds (no signing or publishing)
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+jobs:
+  contract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate deterministic tooling and negative input cases
+        run: python3 -m unittest tools.brouter.tests.test_build_tools
+      - name: Verify pinned upstream map creator still passes its own fixture test
+        run: |
+          set -euo pipefail
+          git init --quiet brouter
+          git -C brouter remote add origin https://github.com/abrensch/brouter.git
+          git -C brouter fetch --depth 1 origin d5c0a75d29b5a036525fd5e9466a6376ee54cc3e
+          git -C brouter checkout --quiet --detach FETCH_HEAD
+          cd brouter
+          ./gradlew --no-daemon :brouter-map-creator:test
+
+  build:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.run_full_build }}
+    needs: contract
+    strategy:
+      fail-fast: false
+      matrix:
+        clean_build: [one, two]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download and checksum locked dated PBF
+        run: |
+          set -euo pipefail
+          source tools/brouter/locked-inputs/ua-kharkiv-pedestrian.env
+          curl --fail --location --retry 3 --output ukraine.osm.pbf "$PBF_URL"
+          python3 tools/brouter/verify_locked_input.py tools/brouter/locked-inputs/ua-kharkiv-pedestrian.env ukraine.osm.pbf
+      - name: Build unsigned clean fixture artifacts
+        run: bash tools/brouter/build_fixture.sh --pbf "$GITHUB_WORKSPACE/ukraine.osm.pbf" --work "$RUNNER_TEMP/brouter-${{ matrix.clean_build }}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ua-kharkiv-pedestrian-${{ matrix.clean_build }}
+          path: ${{ runner.temp }}/brouter-${{ matrix.clean_build }}/artifacts
+          if-no-files-found: error
+
+  compare:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.run_full_build }}
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: ua-kharkiv-pedestrian-*
+          path: builds
+          merge-multiple: false
+      - name: Require byte-identical unsigned artifact and regression evidence
+        run: |
+          set -euo pipefail
+          diff -ru builds/ua-kharkiv-pedestrian-one builds/ua-kharkiv-pedestrian-two

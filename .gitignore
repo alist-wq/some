@@ -129,6 +129,8 @@ coverage/
 *.exec
 *.profraw
 *.profdata
+__pycache__/
+*.py[cod]
 
 # Archives generated for distribution or local transfer
 *.zip
@@ -136,4 +138,3 @@ coverage/
 *.tar.gz
 *.tgz
 *.7z
-
