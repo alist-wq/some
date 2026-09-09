@@ -85,11 +85,13 @@ cp "$PROFILE_DIR/lookups.dat" "$ARTIFACT_DIR/lookups.dat"
 cp "$PROFILE_DIR/renav-pedestrian.brf" "$ARTIFACT_DIR/renav-pedestrian.brf"
 cp "$SEGMENT_PATH" "$ARTIFACT_DIR/$SEGMENT"
 
-# A deterministic, in-segment pedestrian regression. The normalized output
-# contains only route geometry, not generated timestamps or logs.
+# A deterministic pedestrian regression inside E35_N50 (longitude 35–40,
+# latitude 50–55). The normalized output contains only route geometry, not
+# generated timestamps or logs.
+readonly REGRESSION_ROUTE='36.2208,50.0035|36.2391,50.0084'
 pushd "$ARTIFACT_DIR" >/dev/null
 java -Xmx512M -cp "$BROUTER_JAR" btools.server.BRouter . . 0 renav-pedestrian \
-  '36.2208,49.9935|36.2391,49.9984'
+  "$REGRESSION_ROUTE"
 [[ -s testtrack.gpx ]] || { echo "pedestrian regression did not produce a GPX route" >&2; exit 70; }
 python3 "$REPOSITORY_ROOT/tools/brouter/write_regression.py" testtrack.gpx regression.json
 rm testtrack.gpx
