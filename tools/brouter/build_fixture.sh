@@ -92,9 +92,12 @@ readonly REGRESSION_ROUTE='36.2208,50.0035|36.2391,50.0084'
 pushd "$ARTIFACT_DIR" >/dev/null
 java -Xmx512M -cp "$BROUTER_JAR" btools.server.BRouter . . 0 renav-pedestrian \
   "$REGRESSION_ROUTE"
-[[ -s testtrack.gpx ]] || { echo "pedestrian regression did not produce a GPX route" >&2; exit 70; }
-python3 "$REPOSITORY_ROOT/tools/brouter/write_regression.py" testtrack.gpx regression.json
-rm testtrack.gpx
+# BRouter appends the alternative index to its CLI export base, producing
+# testtrack0.gpx for the primary route.
+readonly REGRESSION_GPX='testtrack0.gpx'
+[[ -s "$REGRESSION_GPX" ]] || { echo "pedestrian regression did not produce a GPX route" >&2; exit 70; }
+python3 "$REPOSITORY_ROOT/tools/brouter/write_regression.py" "$REGRESSION_GPX" regression.json
+rm "$REGRESSION_GPX"
 popd >/dev/null
 
 python3 "$REPOSITORY_ROOT/tools/brouter/write_build_evidence.py" \
