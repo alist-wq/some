@@ -28,6 +28,8 @@ done
 
 # shellcheck disable=SC1090
 python3 "$REPOSITORY_ROOT/tools/brouter/verify_locked_input.py" "$LOCK_FILE" "$PBF_PATH"
+# shellcheck disable=SC1090
+source "$LOCK_FILE"
 
 for command in git java python3 sha256sum; do
   command -v "$command" >/dev/null || { echo "missing required command: $command" >&2; exit 69; }
