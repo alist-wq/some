@@ -102,12 +102,13 @@ class BuildToolsTest(unittest.TestCase):
         }
         (artifacts / "build-evidence.json").write_text(json.dumps(evidence), encoding="utf-8")
         output = artifacts / "manifest.json"
-        subprocess.run([sys.executable, RELEASE_MANIFEST, "--artifacts", artifacts, "--package-version", "2026.09.04-1", "--map-compatibility-version", "openfreemap-2026-09", "--output", output], check=True)
+        subprocess.run([sys.executable, RELEASE_MANIFEST, "--artifacts", artifacts, "--package-version", "2026.09.04-1", "--profile-version", "renav-pedestrian-1", "--map-compatibility-version", "openfreemap-2026-09", "--output", output], check=True)
         manifest = json.loads(output.read_text())
         self.assertEqual("ua-kharkiv-pedestrian", manifest["regionId"])
+        self.assertEqual("renav-pedestrian-1", manifest["profile"]["version"])
         self.assertEqual(["E35_N50.rd5"], [entry["name"] for entry in manifest["segments"]])
         segment.write_bytes(b"corrupt")
-        self.assertNotEqual(subprocess.run([sys.executable, RELEASE_MANIFEST, "--artifacts", artifacts, "--package-version", "2026.09.04-1", "--map-compatibility-version", "openfreemap-2026-09", "--output", output]).returncode, 0)
+        self.assertNotEqual(subprocess.run([sys.executable, RELEASE_MANIFEST, "--artifacts", artifacts, "--package-version", "2026.09.04-1", "--profile-version", "renav-pedestrian-1", "--map-compatibility-version", "openfreemap-2026-09", "--output", output]).returncode, 0)
 
 
 if __name__ == "__main__":

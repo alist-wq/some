@@ -21,6 +21,7 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--artifacts", type=Path, required=True)
     parser.add_argument("--package-version", required=True)
+    parser.add_argument("--profile-version", required=True)
     parser.add_argument("--map-compatibility-version", required=True)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
@@ -44,7 +45,7 @@ def main() -> None:
         "mapCompatibilityVersion": args.map_compatibility_version,
         "source": evidence["source"],
         "brouterRevision": evidence["brouterRevision"],
-        "profile": evidence_artifacts["renav-pedestrian.brf"],
+        "profile": {**evidence_artifacts["renav-pedestrian.brf"], "version": args.profile_version},
         "lookup": evidence_artifacts["lookups.dat"],
         "segments": [evidence_artifacts["E35_N50.rd5"]],
         "regression": evidence["regression"],

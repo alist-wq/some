@@ -34,7 +34,7 @@ jobs:
       - name: Verify and create canonical manifest
         run: |
           set -euo pipefail
-          python3 tools/brouter/write_release_manifest.py --artifacts one --package-version "${{ inputs.package_version }}" --map-compatibility-version openfreemap-2026-09 --output one/manifest.json
+          python3 tools/brouter/write_release_manifest.py --artifacts one --package-version "${{ inputs.package_version }}" --profile-version renav-pedestrian-1 --map-compatibility-version openfreemap-2026-09 --output one/manifest.json
       - name: Sign manifest and derive public verifier
         env:
           RENAV_BROUTER_ED25519_PRIVATE_KEY: ${{ secrets.RENAV_BROUTER_ED25519_PRIVATE_KEY }}
