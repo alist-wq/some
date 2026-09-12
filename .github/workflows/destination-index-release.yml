@@ -1,0 +1,58 @@
+name: Publish signed Kharkiv destination index
+
+on:
+  workflow_dispatch:
+    inputs:
+      package_version:
+        description: Immutable destination-index package version
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    environment: destination-index-release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install ephemeral PBF reader
+        run: python3 -m pip install --disable-pip-version-check osmium==3.7.0
+      - name: Fetch and verify locked source
+        run: |
+          set -euo pipefail
+          source tools/brouter/locked-inputs/ua-kharkiv-pedestrian.env
+          curl --fail --location --retry 3 "$PBF_URL" --output ukraine.osm.pbf
+          printf '%s  %s\n' "$PBF_SHA256" ukraine.osm.pbf | sha256sum --check --strict
+      - name: Build twice and compare
+        run: |
+          set -euo pipefail
+          mkdir one two
+          python3 tools/destination-index/build_destination_index.py --input ukraine.osm.pbf --output one/destination-index.jsonl
+          python3 tools/destination-index/build_destination_index.py --input ukraine.osm.pbf --output two/destination-index.jsonl
+          cmp one/destination-index.jsonl two/destination-index.jsonl
+      - name: Create canonical manifest
+        run: python3 tools/destination-index/write_manifest.py --index one/destination-index.jsonl --lock tools/brouter/locked-inputs/ua-kharkiv-pedestrian.env --package-version "${{ inputs.package_version }}" --output one/manifest.json
+      - name: Sign and verify release evidence
+        env:
+          RENAV_DESTINATION_INDEX_ED25519_PRIVATE_KEY: ${{ secrets.RENAV_DESTINATION_INDEX_ED25519_PRIVATE_KEY }}
+          EXPECTED_FINGERPRINT: SHA256:SXfNV9xLocPsovQ18P9E289B8Tg9M5T4uRHIn42G3Dg
+        run: |
+          set -euo pipefail
+          test -n "$RENAV_DESTINATION_INDEX_ED25519_PRIVATE_KEY"
+          key_file="$(mktemp)"; trap 'rm -f "$key_file"' EXIT
+          printf '%s' "$RENAV_DESTINATION_INDEX_ED25519_PRIVATE_KEY" > "$key_file"; chmod 600 "$key_file"
+          ssh-keygen -Y sign -f "$key_file" -n renav-destination-index-manifest one/manifest.json
+          ssh-keygen -y -f "$key_file" > one/renav-destination-index-ed25519.pub
+          test "$(ssh-keygen -lf one/renav-destination-index-ed25519.pub -E sha256 | awk '{print $2}')" = "$EXPECTED_FINGERPRINT"
+          printf 'renav-destination-index %s\n' "$(cat one/renav-destination-index-ed25519.pub)" > one/allowed-signers
+          ssh-keygen -Y verify -f one/allowed-signers -I renav-destination-index -n renav-destination-index-manifest -s one/manifest.json.sig < one/manifest.json
+      - name: Publish immutable assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag="destination-index-ua-kharkiv-pedestrian-${{ inputs.package_version }}"
+          ! gh release view "$tag" >/dev/null 2>&1
+          gh release create "$tag" one/destination-index.jsonl one/manifest.json one/manifest.json.sig one/renav-destination-index-ed25519.pub --title "RENAV Kharkiv destination index ${{ inputs.package_version }}" --notes "Signed offline destination index. © OpenStreetMap contributors, ODbL 1.0."

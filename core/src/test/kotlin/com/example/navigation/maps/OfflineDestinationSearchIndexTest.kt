@@ -20,6 +20,11 @@ class OfflineDestinationSearchIndexTest {
         assertEquals("place-1", (index.search("NATIONAL-ART") as DestinationSearchResult.Results).matches.single().stableId)
     }
 
+    @Test fun `ukrainian search tokens remain searchable`() {
+        assertEquals("вулиця харків", OfflineDestinationSearchIndex.normalize("Вулиця Харків"))
+        assertEquals("музей", OfflineDestinationSearchIndex.normalize("Музей"))
+    }
+
     @Test fun `unavailable and invalid inputs are explicit`() {
         assertEquals(DestinationIndexLoadResult.NoRegionInstalled, OfflineDestinationSearchIndex.load(null, null, null))
         assertIs<DestinationIndexLoadResult.IndexUnavailable>(OfflineDestinationSearchIndex.load(packageVersion, null, null))

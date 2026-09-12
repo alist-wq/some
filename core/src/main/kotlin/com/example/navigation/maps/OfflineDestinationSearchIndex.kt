@@ -99,10 +99,12 @@ class OfflineDestinationSearchIndex private constructor(
             }.toByteArray(Charsets.UTF_8)
         ).joinToString("") { "%02x".format(it) }
 
-        fun normalize(value: String): String = Normalizer.normalize(value, Normalizer.Form.NFD)
-            .replace(Regex("\\p{M}"), "")
+        fun normalize(value: String): String = Normalizer.normalize(
+            Normalizer.normalize(value, Normalizer.Form.NFD).replace(Regex("(?<=[A-Za-z])\\p{M}"), ""),
+            Normalizer.Form.NFC
+        )
             .lowercase()
-            .replace(Regex("[^a-z0-9]+"), " ")
+            .replace(Regex("[^\\p{L}\\p{N}]+"), " ")
             .trim()
             .replace(Regex(" +"), " ")
     }
