@@ -99,7 +99,10 @@ import com.example.navigation.routing.ConfirmedRoutePlan
 import com.example.navigation.routing.RoutePlanningUseCase
 import com.example.navigation.routing.RoutePlanningState
 import com.example.navigation.routing.SyntheticDestinationJourneyFixture
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import org.maplibre.android.MapLibre
 import org.maplibre.android.camera.CameraUpdateFactory
 import org.maplibre.android.geometry.LatLng
@@ -534,6 +537,27 @@ private fun NavigationAppScreen(
     val context = LocalContext.current
     val reducedMotion = remember(context) { context.motionAccessibilityPreference().reducedMotion }
     var regionalDiscovery by remember { mutableStateOf<RegionDiscoveryResult>(RegionDiscoveryResult.CatalogUnavailable) }
+    var destinationIndexRefresh by remember { mutableIntStateOf(0) }
+    var destinationIndexInstallMessage by remember { mutableStateOf<String?>(null) }
+    val coroutineScope = rememberCoroutineScope()
+    val installedDestinationIndex = when (val production = mapRuntime.destinationIndexRuntime.activeSearchIndex()) {
+        is com.example.navigation.maps.DestinationIndexLoadResult.Ready -> production.index
+        else -> null
+    }
+    fun installDestinationIndexForActiveMap() {
+        destinationIndexInstallMessage = "Downloading signed destination index…"
+        coroutineScope.launch(Dispatchers.IO) {
+            val result = mapRuntime.destinationIndexRuntime.installForActiveMap()
+            withContext(Dispatchers.Main) {
+                destinationIndexRefresh++
+                destinationIndexInstallMessage = when (result) {
+                    is com.example.navigation.maps.DestinationIndexPackageInstallResult.Activated ->
+                        "Offline destination index is ready for search. Routing remains unavailable."
+                    is com.example.navigation.maps.DestinationIndexPackageInstallResult.Unavailable -> result.reason
+                }
+            }
+        }
+    }
     var regionalDownload by remember { mutableStateOf(RegionalMapDownloadState()) }
     val mapRuntime = remember(context) { ProductionRegionalMapRuntime(context) { regionalDownload = it } }
     var activeRegionalPackage by remember { mutableStateOf(mapRuntime.activePackage()) }
@@ -563,7 +587,10 @@ private fun NavigationAppScreen(
         AppScreen.MAIN -> RecorderMapScreen(
             developerMode = false, onOpenSettings = { onNavigate(AppScreen.SETTINGS) }, onOpenDeveloper = { onNavigate(AppScreen.DEVELOPER) }, onOpenPedestrianRecording = { onNavigate(AppScreen.PEDESTRIAN_RECORDING) }, onOpenOfflineMaps = { refreshRegionalDiscovery(); onNavigate(AppScreen.OFFLINE_MAPS) },
             controller, navigationMapState, recording, message, obdStatus, pairedDevices, selectedAddress,
-            savedSessions, selectedSessionPaths, onSelectObd, onPermissions, onStart, onStop, onMark, onToggleSession, onExport
+            savedSessions, selectedSessionPaths, onSelectObd, onPermissions, onStart, onStop, onMark, onToggleSession, onExport,
+            installedDestinationIndex = installedDestinationIndex,
+            destinationIndexInstallMessage = destinationIndexInstallMessage,
+            onInstallDestinationIndex = ::installDestinationIndexForActiveMap
         )
         AppScreen.SETTINGS -> SettingsScreen(
             obdStatus, pairedDevices, nearbyDevices, obdDiscoveryStatus, selectedAddress, onPermissions, onSelectObd,
@@ -573,7 +600,9 @@ private fun NavigationAppScreen(
             developerMode = true, onOpenSettings = { onNavigate(AppScreen.SETTINGS) }, onOpenDeveloper = {}, onOpenPedestrianRecording = { onNavigate(AppScreen.PEDESTRIAN_RECORDING) }, onOpenOfflineMaps = { refreshRegionalDiscovery(); onNavigate(AppScreen.OFFLINE_MAPS) },
             controller, navigationMapState, recording, message, obdStatus, pairedDevices, selectedAddress,
             savedSessions, selectedSessionPaths, onSelectObd, onPermissions, onStart, onStop, onMark, onToggleSession, onExport,
-            onBack = { onNavigate(AppScreen.MAIN) }
+            onBack = { onNavigate(AppScreen.MAIN) }, installedDestinationIndex = installedDestinationIndex,
+            destinationIndexInstallMessage = destinationIndexInstallMessage,
+            onInstallDestinationIndex = ::installDestinationIndexForActiveMap
         )
         AppScreen.PEDESTRIAN_RECORDING -> PedestrianFieldRecordingScreen(
             recording = recording,
@@ -800,7 +829,10 @@ private fun RecorderMapScreen(
     onMark: () -> Unit,
     onToggleSession: (Path) -> Unit,
     onExport: () -> Unit,
-    onBack: (() -> Unit)? = null
+    onBack: (() -> Unit)? = null,
+    installedDestinationIndex: OfflineDestinationSearchIndex? = null,
+    destinationIndexInstallMessage: String? = null,
+    onInstallDestinationIndex: () -> Unit = {}
 ) {
     val context = LocalContext.current
     val reducedMotion = remember(context) { context.motionAccessibilityPreference().reducedMotion }
@@ -828,7 +860,8 @@ private fun RecorderMapScreen(
             null
         }
     }
-    val destinationIndex: OfflineDestinationSearchIndex? = syntheticJourneyFixture?.index
+    // A real installed index takes precedence. The debug fixture is never a production fallback.
+    val destinationIndex = installedDestinationIndex ?: syntheticJourneyFixture?.index
     val routePlanner = remember { RoutePlanningUseCase() }
     val activeRouteLifecycle = remember { ActiveRouteLifecycle() }
     var syntheticObservationIndex by remember { mutableIntStateOf(0) }
@@ -1347,6 +1380,18 @@ private fun RecorderMapScreen(
                         exportPreparing = false
                     }
                 }
+                if (installedDestinationIndex == null) {
+                    Button(onClick = {
+                        onInstallDestinationIndex()
+                        menuOpen = false
+                        RenavDiagnostics.event("destination_index_install_requested")
+                    }, modifier = Modifier.semantics { contentDescription = "Download signed offline destination index" }) {
+                        Text("DOWNLOAD DESTINATION INDEX")
+                    }
+                } else {
+                    Text("OFFLINE DESTINATION INDEX READY · SEARCH ONLY", color = Color(0xFF1B5E20))
+                }
+                destinationIndexInstallMessage?.let { Text(it, color = Color(0xFF6A1B9A)) }
                 onBack?.let { Button(onClick = it) { Text("EXIT DEVELOPER MODE") } }
             } else {
                 Button(onClick = {

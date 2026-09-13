@@ -14,7 +14,7 @@ object ProductionRegionalMapCatalog {
     )
 
     val catalog = RegionalMapCatalog("2026-09", listOf(
-        packageFor("ua-kyiv", "Kyiv, Ukraine", RegionalMapBounds(50.30, 30.20, 50.62, 30.85), 120_000_000L),
+        packageFor("ua-kharkiv-pedestrian", "Kharkiv, Ukraine", RegionalMapBounds(49.80, 35.90, 50.20, 36.50), 120_000_000L),
         packageFor("ua-lviv", "Lviv, Ukraine", RegionalMapBounds(49.70, 23.75, 50.05, 24.25), 85_000_000L)
     ))
 
@@ -38,6 +38,8 @@ class ProductionRegionalMapRuntime(context: Context, private val onStateChanged:
     private val manager = MapLibreOfflineRegionManager(context, metadata)
     private val activeStore = ActiveRegionalMapStore(context)
     private val stateStore = PreferencesRegionalMapDownloadStateStore(context)
+    /** Destination search data is managed separately and never represents a routing graph. */
+    val destinationIndexRuntime = ProductionDestinationIndexPackageRuntime(context.filesDir.toPath(), ::activePackage)
     val orchestrator = RegionalMapDownloadOrchestrator(
         MapLibreRegionalMapDownloadBackend(manager),
         RegionalMapPackageVerifier { packageInfo, regionId, bytes ->
@@ -48,9 +50,15 @@ class ProductionRegionalMapRuntime(context: Context, private val onStateChanged:
         },
         RegionalMapActivator { packageInfo, _ -> activeStore.activate(packageInfo) }, stateStore, onStateChanged
     )
+    init {
+        destinationIndexRuntime.recoverInterruptedDownloads()
+    }
     fun activePackage(): RegionalMapPackage? = activeStore.active(ProductionRegionalMapCatalog.catalog)
     fun removeActive(onDone: () -> Unit, onError: (String) -> Unit) {
         val id = orchestrator.state.regionId ?: return onDone()
-        manager.delete(id, { activeStore.clear(); stateStore.clear(); onStateChanged(RegionalMapDownloadState()); onDone() }, onError)
+        manager.delete(id, {
+            destinationIndexRuntime.removeForActiveMap()
+            activeStore.clear(); stateStore.clear(); onStateChanged(RegionalMapDownloadState()); onDone()
+        }, onError)
     }
 }
