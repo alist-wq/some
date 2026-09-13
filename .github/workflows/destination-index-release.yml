@@ -48,11 +48,39 @@ jobs:
           test "$(ssh-keygen -lf one/renav-destination-index-ed25519.pub -E sha256 | awk '{print $2}')" = "$EXPECTED_FINGERPRINT"
           printf 'renav-destination-index %s\n' "$(cat one/renav-destination-index-ed25519.pub)" > one/allowed-signers
           ssh-keygen -Y verify -f one/allowed-signers -I renav-destination-index -n renav-destination-index-manifest -s one/manifest.json.sig < one/manifest.json
-      - name: Publish immutable assets
+      - name: Refuse an existing immutable version
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           tag="destination-index-ua-kharkiv-pedestrian-${{ inputs.package_version }}"
           ! gh release view "$tag" >/dev/null 2>&1
+      - name: Publish immutable assets to R2
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.RENAV_R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.RENAV_R2_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: auto
+          R2_S3_ENDPOINT: ${{ secrets.RENAV_R2_S3_ENDPOINT }}
+          R2_BUCKET: renav-public-releases
+          R2_PUBLIC_BASE_URL: https://downloads.renav.me
+        run: |
+          set -euo pipefail
+          command -v aws >/dev/null
+          test -n "$AWS_ACCESS_KEY_ID"
+          test -n "$AWS_SECRET_ACCESS_KEY"
+          test -n "$R2_S3_ENDPOINT"
+          prefix="renav/destination-index/ua-kharkiv-pedestrian/${{ inputs.package_version }}"
+          for asset in destination-index.jsonl manifest.json manifest.json.sig renav-destination-index-ed25519.pub; do
+            key="$prefix/$asset"
+            ! aws s3api head-object --bucket "$R2_BUCKET" --key "$key" --endpoint-url "$R2_S3_ENDPOINT" >/dev/null 2>&1
+            aws s3 cp "one/$asset" "s3://$R2_BUCKET/$key" --endpoint-url "$R2_S3_ENDPOINT" --no-progress
+            curl --fail --silent --show-error --location "$R2_PUBLIC_BASE_URL/$key" --output "published-$asset"
+            cmp "one/$asset" "published-$asset"
+          done
+      - name: Publish immutable assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag="destination-index-ua-kharkiv-pedestrian-${{ inputs.package_version }}"
           gh release create "$tag" one/destination-index.jsonl one/manifest.json one/manifest.json.sig one/renav-destination-index-ed25519.pub --title "RENAV Kharkiv destination index ${{ inputs.package_version }}" --notes "Signed offline destination index. © OpenStreetMap contributors, ODbL 1.0."
