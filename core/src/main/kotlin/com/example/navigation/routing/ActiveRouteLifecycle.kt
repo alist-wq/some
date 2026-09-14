@@ -4,7 +4,20 @@ import com.example.navigation.core.MonotonicTimestamp
 import com.example.navigation.navigation.NavigationPosition
 import com.example.navigation.navigation.PositionConfidence
 
-enum class ActiveRoutePhase { ACTIVE, LOW_CONFIDENCE, OFF_ROUTE, REROUTE_REQUIRED, ARRIVED, STOPPED, UNAVAILABLE }
+enum class ActiveRoutePhase {
+    ACTIVE,
+    LOW_CONFIDENCE,
+    OFF_ROUTE,
+    REROUTE_REQUIRED,
+    PAUSE_REQUESTED,
+    PAUSED,
+    RESUME_AWAITING_FRESH_OBSERVATIONS,
+    RESUMED,
+    ARRIVED,
+    CANCELLED,
+    STOPPED,
+    UNAVAILABLE
+}
 
 data class ActiveRouteConfig(
     val arrivalDistanceMeters: Double = 15.0,
@@ -47,12 +60,45 @@ data class ActiveRouteState(
     val reason: String? = null,
     internal val arrivalEvidence: Int = 0,
     internal val offRouteEvidence: Int = 0
-)
+) {
+    val guidancePresentationPaused: Boolean get() = phase in setOf(
+        ActiveRoutePhase.PAUSE_REQUESTED,
+        ActiveRoutePhase.PAUSED,
+        ActiveRoutePhase.RESUME_AWAITING_FRESH_OBSERVATIONS
+    )
+    val guidanceOutputActive: Boolean get() = phase in setOf(
+        ActiveRoutePhase.ACTIVE,
+        ActiveRoutePhase.LOW_CONFIDENCE,
+        ActiveRoutePhase.OFF_ROUTE,
+        ActiveRoutePhase.REROUTE_REQUIRED,
+        ActiveRoutePhase.RESUMED,
+        ActiveRoutePhase.UNAVAILABLE
+    )
+}
+
+/** Ephemeral evidence gate; it deliberately stores no prior estimator or route-progress state. */
+class ActiveGuidanceFreshObservationGate {
+    private var freshLocationTimestamp: MonotonicTimestamp? = null
+    private var freshSensorTimestamp: MonotonicTimestamp? = null
+
+    fun observeLocation(timestamp: MonotonicTimestamp) {
+        if (freshLocationTimestamp == null || timestamp > freshLocationTimestamp!!) freshLocationTimestamp = timestamp
+    }
+
+    fun observeSensor(timestamp: MonotonicTimestamp) {
+        if (freshSensorTimestamp == null || timestamp > freshSensorTimestamp!!) freshSensorTimestamp = timestamp
+    }
+
+    fun isReady(): Boolean = freshLocationTimestamp != null && freshSensorTimestamp != null
+    fun clear() { freshLocationTimestamp = null; freshSensorTimestamp = null }
+}
 
 /** Lifecycle reducer over existing navigation estimates and route-progress output. */
 class ActiveRouteLifecycle(private val config: ActiveRouteConfig = ActiveRouteConfig()) {
     var state = ActiveRouteState()
         private set
+    private val freshObservationGate = ActiveGuidanceFreshObservationGate()
+    private var resumeMinimumTimestamp: MonotonicTimestamp? = null
 
     fun start(plan: ConfirmedRoutePlan): ActiveRouteState {
         require(state.phase == ActiveRoutePhase.STOPPED) { "Stop the current route before starting another" }
@@ -60,9 +106,27 @@ class ActiveRouteLifecycle(private val config: ActiveRouteConfig = ActiveRouteCo
         return state
     }
 
+    /**
+     * Restores only a previously confirmed route after an interruption. Progress, navigation
+     * position, inertial state, and timestamps are intentionally absent until fresh evidence arrives.
+     */
+    fun resumeAfterInterruption(plan: ConfirmedRoutePlan): ActiveRouteState {
+        require(state.phase == ActiveRoutePhase.STOPPED) { "Stop the current route before restoring it" }
+        freshObservationGate.clear()
+        resumeMinimumTimestamp = null
+        state = ActiveRouteState(
+            phase = ActiveRoutePhase.RESUME_AWAITING_FRESH_OBSERVATIONS,
+            confirmedPlan = plan,
+            reason = "Route restored for review; fresh location and sensor observations are required"
+        )
+        return state
+    }
+
     fun observe(observation: ActiveRouteObservation): ActiveRouteState {
         val plan = requireNotNull(state.confirmedPlan) { "A confirmed route must be started first" }
         if (state.phase == ActiveRoutePhase.ARRIVED) return state
+        if (state.phase in setOf(ActiveRoutePhase.PAUSE_REQUESTED, ActiveRoutePhase.PAUSED, ActiveRoutePhase.RESUME_AWAITING_FRESH_OBSERVATIONS,
+                ActiveRoutePhase.CANCELLED, ActiveRoutePhase.STOPPED)) return state
         val previousTimestamp = state.lastTimestamp
         if (previousTimestamp != null && observation.timestamp <= previousTimestamp) return unavailable("Stale route observation", previousTimestamp)
         val position = observation.position ?: return unavailable("Navigation position unavailable", observation.timestamp)
@@ -111,6 +175,81 @@ class ActiveRouteLifecycle(private val config: ActiveRouteConfig = ActiveRouteCo
     }
 
     fun stop(): ActiveRouteState {
+        freshObservationGate.clear()
+        resumeMinimumTimestamp = null
+        state = ActiveRouteState(phase = ActiveRoutePhase.STOPPED)
+        return state
+    }
+
+    /** Requests pause without changing route selection, trust, sensor collection, or progress. */
+    fun requestPause(): ActiveRouteState {
+        require(state.phase in PAUSABLE_PHASES) { "Guidance cannot be paused from ${state.phase}" }
+        state = state.copy(phase = ActiveRoutePhase.PAUSE_REQUESTED, reason = "Guidance pause requested")
+        return state
+    }
+
+    fun canRequestPause(): Boolean = state.phase in PAUSABLE_PHASES
+
+    /** Confirms the requested pause; the confirmed route remains available for review. */
+    fun confirmPause(): ActiveRouteState {
+        require(state.phase == ActiveRoutePhase.PAUSE_REQUESTED) { "Guidance pause was not requested" }
+        freshObservationGate.clear()
+        state = state.copy(phase = ActiveRoutePhase.PAUSED, reason = "Guidance paused; route retained for review")
+        return state
+    }
+
+    /** Starts a resume attempt but keeps guidance inactive until fresh independent observations arrive. */
+    fun requestResume(): ActiveRouteState {
+        require(state.phase == ActiveRoutePhase.PAUSED) { "Guidance can resume only from a paused state" }
+        freshObservationGate.clear()
+        resumeMinimumTimestamp = state.lastTimestamp
+        state = state.copy(
+            phase = ActiveRoutePhase.RESUME_AWAITING_FRESH_OBSERVATIONS,
+            reason = "Fresh location and sensor observations are required before guidance resumes"
+        )
+        return state
+    }
+
+    fun observeFreshLocation(timestamp: MonotonicTimestamp): ActiveRouteState {
+        require(state.phase == ActiveRoutePhase.RESUME_AWAITING_FRESH_OBSERVATIONS) { "Fresh location is not required in ${state.phase}" }
+        requireAfterPause(timestamp)
+        freshObservationGate.observeLocation(timestamp)
+        return state
+    }
+
+    fun observeFreshSensor(timestamp: MonotonicTimestamp): ActiveRouteState {
+        require(state.phase == ActiveRoutePhase.RESUME_AWAITING_FRESH_OBSERVATIONS) { "Fresh sensor evidence is not required in ${state.phase}" }
+        requireAfterPause(timestamp)
+        freshObservationGate.observeSensor(timestamp)
+        return state
+    }
+
+    /** Activates the retained route only after fresh post-pause or post-restart evidence is present. */
+    fun resumeWhenReady(): ActiveRouteState {
+        require(state.phase == ActiveRoutePhase.RESUME_AWAITING_FRESH_OBSERVATIONS) { "Guidance is not awaiting resume evidence" }
+        if (!freshObservationGate.isReady()) return state
+        state = state.copy(phase = ActiveRoutePhase.RESUMED, reason = "Guidance resumed from fresh observations")
+        freshObservationGate.clear()
+        resumeMinimumTimestamp = null
+        return state
+    }
+
+    /** Explicit cancellation remains distinct from arrival and retains no active guidance state. */
+    fun cancel(): ActiveRouteState {
+        require(state.phase !in setOf(ActiveRoutePhase.ARRIVED, ActiveRoutePhase.CANCELLED, ActiveRoutePhase.STOPPED)) {
+            "Guidance cannot be cancelled from ${state.phase}"
+        }
+        freshObservationGate.clear()
+        resumeMinimumTimestamp = null
+        state = state.copy(phase = ActiveRoutePhase.CANCELLED, reason = "Guidance cancelled")
+        return state
+    }
+
+    /** Arrival is cleared only after an explicit acknowledgement, never by pause or resume. */
+    fun acknowledgeArrival(): ActiveRouteState {
+        require(state.phase == ActiveRoutePhase.ARRIVED) { "Only an arrived route can be acknowledged" }
+        freshObservationGate.clear()
+        resumeMinimumTimestamp = null
         state = ActiveRouteState(phase = ActiveRoutePhase.STOPPED)
         return state
     }
@@ -122,5 +261,22 @@ class ActiveRouteLifecycle(private val config: ActiveRouteConfig = ActiveRouteCo
     private fun unavailable(reason: String, timestamp: MonotonicTimestamp): ActiveRouteState {
         state = state.copy(phase = ActiveRoutePhase.UNAVAILABLE, lastTimestamp = timestamp, reason = reason, arrivalEvidence = 0, offRouteEvidence = 0)
         return state
+    }
+
+    private fun requireAfterPause(timestamp: MonotonicTimestamp) {
+        require(resumeMinimumTimestamp == null || timestamp > resumeMinimumTimestamp!!) {
+            "Fresh observation must be newer than the last pre-pause route observation"
+        }
+    }
+
+    private companion object {
+        val PAUSABLE_PHASES = setOf(
+            ActiveRoutePhase.ACTIVE,
+            ActiveRoutePhase.LOW_CONFIDENCE,
+            ActiveRoutePhase.OFF_ROUTE,
+            ActiveRoutePhase.REROUTE_REQUIRED,
+            ActiveRoutePhase.UNAVAILABLE,
+            ActiveRoutePhase.RESUMED
+        )
     }
 }

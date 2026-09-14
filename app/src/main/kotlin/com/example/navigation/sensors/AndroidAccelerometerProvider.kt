@@ -16,7 +16,8 @@ fun interface AccelerometerListener {
 class AndroidAccelerometerProvider(
     private val sensorManager: SensorManager,
     callbackLooper: Looper,
-    private val listener: AccelerometerListener
+    private val listener: AccelerometerListener,
+    private val accuracyListener: (Int) -> Unit = {}
 ) {
     private val callbackHandler = Handler(callbackLooper)
     private val sensor = sensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)
@@ -31,7 +32,7 @@ class AndroidAccelerometerProvider(
             ))
         }
 
-        override fun onAccuracyChanged(sensor: Sensor, accuracy: Int) = Unit
+        override fun onAccuracyChanged(sensor: Sensor, accuracy: Int) = accuracyListener(accuracy)
     }
 
     /** Returns false when the device has no accelerometer or registration fails. */

@@ -35,5 +35,11 @@ class RouteUiPresentationTest {
         assertEquals("POSITION CONFIDENCE LOW", low.label); assertNull(low.maneuver)
         val arrived = ActiveRouteGuidancePresentationFactory.create(ActiveRouteState(ActiveRoutePhase.ARRIVED, plan, confidence = PositionConfidence.HIGH))
         assertEquals("ARRIVED", arrived.label); assertTrue(arrived.canChooseNewDestination)
+        val paused = ActiveRouteGuidancePresentationFactory.create(ActiveRouteState(ActiveRoutePhase.PAUSED, plan))
+        assertEquals("GUIDANCE PAUSED", paused.label); assertNull(paused.maneuver)
+        val awaiting = ActiveRouteGuidancePresentationFactory.create(ActiveRouteState(ActiveRoutePhase.RESUME_AWAITING_FRESH_OBSERVATIONS, plan))
+        assertTrue(awaiting.label.contains("FRESH")); assertNull(awaiting.maneuver)
+        val cancelled = ActiveRouteGuidancePresentationFactory.create(ActiveRouteState(ActiveRoutePhase.CANCELLED, plan))
+        assertEquals("NAVIGATION CANCELLED", cancelled.label); assertFalse(cancelled.canStop)
     }
 }

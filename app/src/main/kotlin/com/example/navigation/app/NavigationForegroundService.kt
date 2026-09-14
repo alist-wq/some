@@ -11,6 +11,7 @@ import android.content.pm.ServiceInfo
 import android.hardware.Sensor
 import android.hardware.SensorManager
 import android.location.LocationManager
+import android.media.AudioManager
 import android.os.Binder
 import android.os.Build
 import android.os.IBinder
@@ -25,13 +26,16 @@ import com.example.navigation.replay.PedestrianPoseLabel
 import com.example.navigation.replay.PedestrianEventLabel
 import java.nio.file.Path
 import com.example.navigation.gnss.GnssTrustNavigationSnapshot
+import com.example.navigation.core.MonotonicTimestamp
 
 data class NavigationServiceSnapshot(
     val recording: Boolean,
     val obdStatus: String,
     val message: String,
     val gnssTrust: GnssTrustNavigationSnapshot? = null,
-    val externalEvidence: ExternalEvidenceSnapshot = ExternalEvidenceSnapshot()
+    val externalEvidence: ExternalEvidenceSnapshot = ExternalEvidenceSnapshot(),
+    val liveSensorQuality: LiveSensorQualityCapabilityFeed? = null,
+    val guidanceAudio: GuidanceOutputCapability? = null
 )
 
 /** Owns active live providers independently of any activity instance. */
@@ -43,11 +47,15 @@ class NavigationForegroundService : Service() {
     private lateinit var bridge: LiveRecordingProviderBridge
     private lateinit var recoveryStore: NavigationProcessRecoveryStore
     private lateinit var externalEvidence: ExternalEvidenceCoordinator
+    private lateinit var sensorQuality: LiveSensorQualityCapabilityTracker
+    private lateinit var guidanceAudio: GuidanceAudioFocusOwner
     @Volatile private var snapshot = NavigationServiceSnapshot(false, "OBD not selected", "Ready")
 
     override fun onCreate() {
         super.onCreate()
         val sensors = getSystemService(SENSOR_SERVICE) as SensorManager
+        sensorQuality = LiveSensorQualityCapabilityTracker(SensorCapabilityCollector.collect(this))
+        guidanceAudio = GuidanceAudioFocusOwner(AndroidGuidanceAudioFocusPlatform(getSystemService(AudioManager::class.java)))
         controller = RecordingSessionController(
             filesDir.toPath().resolve("recordings"),
             RecordingSensorAvailability(
@@ -69,7 +77,23 @@ class NavigationForegroundService : Service() {
             referenceProvider = externalEvidence.referenceProvider,
             onGnssLocation = { sample -> externalEvidence.updateLocation(sample.timestamp,
                 sample.wallClockTimestampMillis ?: System.currentTimeMillis(), sample.latitude, sample.longitude,
-                sample.altitudeMeters ?: 0.0) }
+                sample.altitudeMeters ?: 0.0) },
+            onSensorObservation = { stream, timestamp ->
+                sensorQuality.onObservation(stream, timestamp)
+                updateSensorQuality(timestamp)
+            },
+            onSensorAccuracy = { stream, accuracy, timestamp ->
+                sensorQuality.onReportedAccuracy(stream, accuracy, timestamp)
+                updateSensorQuality(timestamp)
+            },
+            onSensorProvidersStarted = { result ->
+                sensorQuality.onProvidersStarted(result)
+                updateSensorQuality(MonotonicTimestamp(SystemClock.elapsedRealtimeNanos()))
+            },
+            onSensorProvidersStopped = {
+                sensorQuality.onProvidersStopped()
+                updateSensorQuality(MonotonicTimestamp(SystemClock.elapsedRealtimeNanos()))
+            }
         )
         recoveryStore = NavigationProcessRecoveryStore(this)
         snapshot = recoverySnapshot(recoveryStore.consume(ProcessRestartRecoveryPolicy(), System.currentTimeMillis()))
@@ -86,11 +110,20 @@ class NavigationForegroundService : Service() {
         return START_NOT_STICKY
     }
 
-    fun currentSnapshot(): NavigationServiceSnapshot = snapshot
+    /** Re-evaluates callback freshness on read; it does not drive navigation or sensor collection. */
+    fun currentSnapshot(): NavigationServiceSnapshot {
+        if (::sensorQuality.isInitialized) updateSensorQuality(MonotonicTimestamp(SystemClock.elapsedRealtimeNanos()))
+        if (::guidanceAudio.isInitialized) snapshot = snapshot.copy(guidanceAudio = guidanceAudio.snapshot())
+        return snapshot
+    }
     fun recordingController(): RecordingSessionController = controller
     fun markEvent() { if (snapshot.recording) bridge.markEvent("manual event") }
     fun labelPose(pose: PedestrianPoseLabel) { if (snapshot.recording) bridge.labelPose(pose) }
     fun labelPedestrianEvent(event: PedestrianEventLabel) { if (snapshot.recording) bridge.labelPedestrianEvent(event) }
+
+    private fun updateSensorQuality(now: MonotonicTimestamp) {
+        snapshot = snapshot.copy(liveSensorQuality = sensorQuality.snapshot(now))
+    }
 
     private fun startRecording(address: String?, metadata: PedestrianSessionMetadata?) {
         if (snapshot.recording) return
@@ -110,7 +143,8 @@ class NavigationForegroundService : Service() {
                 obdStatus = if (device == null) "OBD not selected" else "OBD connecting",
                 message = "Recording active: GNSS=${result.gnssLocationCapability}, raw GNSS=${result.rawGnssCapability}, status=${result.gnssStatusCapability}, gyro=${result.gyroscope}, accelerometer=${result.accelerometer}, rotation=${result.gameRotationVector}",
                 gnssTrust = snapshot.gnssTrust,
-                externalEvidence = snapshot.externalEvidence
+                externalEvidence = snapshot.externalEvidence,
+                liveSensorQuality = sensorQuality.snapshot(MonotonicTimestamp(SystemClock.elapsedRealtimeNanos()))
             )
             updateNotification("Navigation recording active")
         } catch (error: Throwable) {
@@ -125,7 +159,7 @@ class NavigationForegroundService : Service() {
             recoveryStore.clear()
             externalEvidence.close()
             val saved: Path? = bridge.stop()
-            snapshot = NavigationServiceSnapshot(false, snapshot.obdStatus, "Recording saved: ${saved?.fileName}", snapshot.gnssTrust, snapshot.externalEvidence)
+            snapshot = snapshot.copy(recording = false, message = "Recording saved: ${saved?.fileName}")
         }
         stopForegroundCompat()
         stopSelf()
@@ -134,6 +168,7 @@ class NavigationForegroundService : Service() {
     override fun onDestroy() {
         if (::bridge.isInitialized) bridge.close()
         if (::externalEvidence.isInitialized) externalEvidence.close()
+        if (::guidanceAudio.isInitialized) guidanceAudio.close()
         super.onDestroy()
     }
 

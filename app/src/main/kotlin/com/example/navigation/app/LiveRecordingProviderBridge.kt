@@ -68,7 +68,11 @@ class LiveRecordingProviderBridge(
     private val onTrustEvidence: (LiveGnssEvidence) -> Unit = {},
     private val onTrustSnapshot: (GnssTrustNavigationSnapshot) -> Unit = {},
     referenceProvider: SpacecraftReferenceProvider = UnavailableSpacecraftReferenceProvider,
-    private val onGnssLocation: (GnssSample) -> Unit = {}
+    private val onGnssLocation: (GnssSample) -> Unit = {},
+    private val onSensorObservation: (MotionSensorStream, MonotonicTimestamp) -> Unit = { _, _ -> },
+    private val onSensorAccuracy: (MotionSensorStream, Int, MonotonicTimestamp) -> Unit = { _, _, _ -> },
+    private val onSensorProvidersStarted: (LiveProviderStartResult) -> Unit = {},
+    private val onSensorProvidersStopped: () -> Unit = {}
 ) : AutoCloseable {
     private var activeMode = NavigationMode.UNKNOWN
     private val trustPipeline = GnssTrustNavigationPipeline(navigationMode = { activeMode }, referenceProvider = referenceProvider).also { pipeline ->
@@ -98,9 +102,21 @@ class LiveRecordingProviderBridge(
     private val status = AndroidGnssStatusCollector(locationManager, callbackLooper) {
         controller.append(it); onTrustEvidence(LiveGnssEvidence.Status(it)); trustPipeline.onRecord(GnssStatusSessionRecord(it))
     }
-    private val gyro = AndroidGyroscopeProvider(sensorManager, callbackLooper, { controller.append(it) })
-    private val accelerometer = AndroidAccelerometerProvider(sensorManager, callbackLooper) { controller.append(it) }
-    private val rotation = AndroidGameRotationVectorProvider(sensorManager, callbackLooper) { controller.append(it) }
+    private val gyro = AndroidGyroscopeProvider(
+        sensorManager, callbackLooper,
+        listener = { sample -> controller.append(sample); onSensorObservation(MotionSensorStream.GYROSCOPE, sample.timestamp) },
+        accuracyListener = { accuracy -> onSensorAccuracy(MotionSensorStream.GYROSCOPE, accuracy, monotonicNow()) }
+    )
+    private val accelerometer = AndroidAccelerometerProvider(
+        sensorManager, callbackLooper,
+        listener = { sample -> controller.append(sample); onSensorObservation(MotionSensorStream.ACCELEROMETER, sample.timestamp) },
+        accuracyListener = { accuracy -> onSensorAccuracy(MotionSensorStream.ACCELEROMETER, accuracy, monotonicNow()) }
+    )
+    private val rotation = AndroidGameRotationVectorProvider(
+        sensorManager, callbackLooper,
+        listener = { sample -> controller.append(sample); onSensorObservation(MotionSensorStream.GAME_ROTATION_VECTOR, sample.timestamp) },
+        accuracyListener = { accuracy -> onSensorAccuracy(MotionSensorStream.GAME_ROTATION_VECTOR, accuracy, monotonicNow()) }
+    )
     private val barometer = AndroidBarometerProvider(sensorManager, callbackLooper) { controller.append(it) }
     private val obdExecutor = Executors.newSingleThreadExecutor()
     private var obdDevice: BluetoothDevice? = null
@@ -133,7 +149,7 @@ class LiveRecordingProviderBridge(
             startObdAsync()
             LiveProviderStartResult(rawAvailable, statusAvailable, gyroAvailable, accelerometerAvailable,
                 rotationAvailable, barometerAvailable, obdDevice != null,
-                locationCapability, rawGnss.capability(), status.capability())
+                locationCapability, rawGnss.capability(), status.capability()).also(onSensorProvidersStarted)
         } catch (error: Throwable) {
             stopProviders()
             controller.stop()
@@ -201,5 +217,8 @@ class LiveRecordingProviderBridge(
     private fun stopProviders() {
         barometer.stop(); rotation.stop(); accelerometer.stop(); gyro.stop()
         status.stop(); rawGnss.stop(); location.stop()
+        onSensorProvidersStopped()
     }
+
+    private fun monotonicNow(): MonotonicTimestamp = MonotonicTimestamp(SystemClock.elapsedRealtimeNanos())
 }

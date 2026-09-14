@@ -16,7 +16,8 @@ class AndroidGyroscopeProvider(
     private val sensorManager: SensorManager,
     callbackLooper: Looper,
     private val listener: GyroscopeListener,
-    val targetHz: Int = 50
+    val targetHz: Int = 50,
+    private val accuracyListener: (Int) -> Unit = {}
 ) {
     private val callbackHandler = Handler(callbackLooper)
     private val sensor = sensorManager.getDefaultSensor(Sensor.TYPE_GYROSCOPE)
@@ -27,7 +28,7 @@ class AndroidGyroscopeProvider(
                 com.example.navigation.core.MonotonicTimestamp(event.timestamp)))
         }
 
-        override fun onAccuracyChanged(sensor: Sensor, accuracy: Int) = Unit
+        override fun onAccuracyChanged(sensor: Sensor, accuracy: Int) = accuracyListener(accuracy)
     }
 
     init { require(targetHz in SUPPORTED_RATES_HZ) { "targetHz must be one of 25, 50, or 100" } }

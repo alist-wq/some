@@ -129,6 +129,10 @@ class MainActivity : ComponentActivity() {
     private var savedSessions by mutableStateOf<List<Path>>(emptyList())
     private var selectedSessionPaths by mutableStateOf<Set<Path>>(emptySet())
     private var navigationMapState by mutableStateOf(NavigationMapState())
+    private var settingsRecoveryCapability by mutableStateOf(
+        SettingsRecoveryCapability(null, "Android Settings recovery has not been resolved")
+    )
+    private var runtimeInterruptionFeed by mutableStateOf<RuntimeInterruptionCapabilityFeed?>(null)
     private var startAfterPermission = false
     private var discoverAfterPermission = false
     private var pendingPedestrianMetadata: PedestrianSessionMetadata? = null
@@ -136,6 +140,7 @@ class MainActivity : ComponentActivity() {
     private lateinit var recordingsDirectory: Path
     private lateinit var capabilityReport: SensorCapabilityReport
     private lateinit var capabilityFeatureFlags: CapabilityFeatureFlags
+    private lateinit var settingsRecoveryLauncher: AndroidSettingsRecoveryLauncher
     private val serviceRefreshHandler = Handler(Looper.getMainLooper())
     private val serviceRefresh = object : Runnable {
         override fun run() {
@@ -145,6 +150,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private val permissions = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { result ->
+        refreshRuntimeInterruptionCapability()
         refreshPairedDevices()
         if (discoverAfterPermission) {
             discoverAfterPermission = false
@@ -160,6 +166,10 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    private val settingsRecovery = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) {
+        refreshRuntimeInterruptionCapability(returnedFromSettings = true)
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         installSplashScreen()
         super.onCreate(savedInstanceState)
@@ -167,6 +177,8 @@ class MainActivity : ComponentActivity() {
         MapLibre.getInstance(applicationContext)
         capabilityReport = SensorCapabilityCollector.collect(this)
         capabilityFeatureFlags = CapabilityFeatureFlags.from(capabilityReport)
+        settingsRecoveryLauncher = AndroidSettingsRecoveryLauncher.from(this)
+        refreshRuntimeInterruptionCapability()
         if ((applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE) != 0 && intent.getBooleanExtra(EXTRA_SYNTHETIC_TRUST_SMOKE, false)) {
             val trust = SyntheticGnssTrustSmokeScenario.run()
             navigationMapState = navigationMapState.copy(
@@ -187,7 +199,8 @@ class MainActivity : ComponentActivity() {
                     savedSessions, selectedSessionPaths, ::selectObd, ::requestPermissionsOnly, ::requestStart,
                     ::stopRecording, { navigationService?.markEvent() }, ::toggleSessionSelection,
                     ::exportSelectedSessions, ::discoverObdDevices, ::pairOrSelectNearbyObd,
-                    ::requestPedestrianStart, { navigationService?.labelPose(it) }, { navigationService?.labelPedestrianEvent(it) }
+                    ::requestPedestrianStart, { navigationService?.labelPose(it) }, { navigationService?.labelPedestrianEvent(it) },
+                    settingsRecoveryCapability, ::openAndroidPermissionSettings
                 )
             }
         }
@@ -200,6 +213,8 @@ class MainActivity : ComponentActivity() {
 
     private fun requiredPermissions(): Array<String> = buildList {
         add(Manifest.permission.ACCESS_FINE_LOCATION)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) add(Manifest.permission.ACTIVITY_RECOGNITION)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) add(Manifest.permission.POST_NOTIFICATIONS)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             add(Manifest.permission.BLUETOOTH_SCAN)
             add(Manifest.permission.BLUETOOTH_CONNECT)
@@ -221,6 +236,44 @@ class MainActivity : ComponentActivity() {
     private fun requestPedestrianStart(metadata: PedestrianSessionMetadata) {
         pendingPedestrianMetadata = metadata
         requestStart()
+    }
+
+    private fun currentRuntimePermissionCapability(): RuntimePermissionCapability {
+        val location = if (hasLocationPermission()) RuntimePermissionState.GRANTED else RuntimePermissionState.DENIED
+        val motion = when {
+            Build.VERSION.SDK_INT < Build.VERSION_CODES.Q -> RuntimePermissionState.GRANTED
+            ContextCompat.checkSelfPermission(this, Manifest.permission.ACTIVITY_RECOGNITION) == PackageManager.PERMISSION_GRANTED -> RuntimePermissionState.GRANTED
+            else -> RuntimePermissionState.DENIED
+        }
+        return RuntimePermissionCapability(
+            location = location,
+            motion = motion,
+            settingsRecoveryEligible = location != RuntimePermissionState.GRANTED || motion != RuntimePermissionState.GRANTED
+        )
+    }
+
+    private fun refreshRuntimeInterruptionCapability(returnedFromSettings: Boolean = false) {
+        if (!::capabilityReport.isInitialized || !::settingsRecoveryLauncher.isInitialized) return
+        val permissions = currentRuntimePermissionCapability()
+        settingsRecoveryCapability = settingsRecoveryLauncher.capability(permissions)
+        runtimeInterruptionFeed = RuntimeInterruptionCapabilityFeedFactory.create(
+            RuntimeInterruptionInput(permissions = permissions, sensorCapabilities = capabilityReport,
+                guidanceAudio = navigationService?.currentSnapshot()?.guidanceAudio, settingsRecovery = settingsRecoveryCapability)
+        )
+        if (returnedFromSettings) {
+            message = if (permissions.location == RuntimePermissionState.GRANTED && permissions.motion == RuntimePermissionState.GRANTED) {
+                "Permissions refreshed after Android Settings"
+            } else {
+                "Permissions refreshed after Android Settings; required permission remains unavailable"
+            }
+            RenavDiagnostics.event("android_settings_recovery_returned", "location=${permissions.location} motion=${permissions.motion}")
+        }
+    }
+
+    private fun openAndroidPermissionSettings() {
+        val plan = settingsRecoveryCapability.launchPlan ?: return
+        RenavDiagnostics.event("android_settings_recovery_requested", "destination=${plan.destination}")
+        settingsRecovery.launch(plan.primaryIntent)
     }
 
     @SuppressLint("MissingPermission")
@@ -316,6 +369,11 @@ class MainActivity : ComponentActivity() {
         ContextCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED
     private fun hasBluetoothScanPermission() = Build.VERSION.SDK_INT < Build.VERSION_CODES.S ||
         ContextCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_SCAN) == PackageManager.PERMISSION_GRANTED
+
+    override fun onResume() {
+        super.onResume()
+        refreshRuntimeInterruptionCapability()
+    }
 
     private fun refreshSavedSessions(selectAll: Boolean = false) {
         val sessions = listRecordedSessions(recordingsDirectory)
@@ -459,6 +517,7 @@ class MainActivity : ComponentActivity() {
                     diagnostics = trust.toDiagnostics(state.externalEvidence)
                 )
             }
+            refreshRuntimeInterruptionCapability()
         }
     }
 
@@ -532,11 +591,18 @@ private fun NavigationAppScreen(
     onPairOrSelectNearbyObd: (NearbyObdDevice) -> Unit,
     onStartPedestrian: (PedestrianSessionMetadata) -> Unit,
     onPose: (PedestrianPoseLabel) -> Unit,
-    onPedestrianEvent: (PedestrianEventLabel) -> Unit
+    onPedestrianEvent: (PedestrianEventLabel) -> Unit,
+    settingsRecoveryCapability: SettingsRecoveryCapability,
+    onOpenAndroidPermissionSettings: () -> Unit
 ) {
     val context = LocalContext.current
     val reducedMotion = remember(context) { context.motionAccessibilityPreference().reducedMotion }
     var regionalDiscovery by remember { mutableStateOf<RegionDiscoveryResult>(RegionDiscoveryResult.CatalogUnavailable) }
+    var regionalDownload by remember { mutableStateOf(RegionalMapDownloadState()) }
+    val mapRuntime = remember(context) {
+        ProductionRegionalMapRuntime(context, onStateChanged = { regionalDownload = it })
+    }
+    var activeRegionalPackage by remember { mutableStateOf(mapRuntime.activePackage()) }
     var destinationIndexRefresh by remember { mutableIntStateOf(0) }
     var destinationIndexInstallMessage by remember { mutableStateOf<String?>(null) }
     val coroutineScope = rememberCoroutineScope()
@@ -558,9 +624,6 @@ private fun NavigationAppScreen(
             }
         }
     }
-    var regionalDownload by remember { mutableStateOf(RegionalMapDownloadState()) }
-    val mapRuntime = remember(context) { ProductionRegionalMapRuntime(context) { regionalDownload = it } }
-    var activeRegionalPackage by remember { mutableStateOf(mapRuntime.activePackage()) }
     fun refreshRegionalDiscovery() {
         val location = navigationMapState.estimatedPosition?.let { GeoPoint(it.latitude, it.longitude) }
         val permission = ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
@@ -594,7 +657,8 @@ private fun NavigationAppScreen(
         )
         AppScreen.SETTINGS -> SettingsScreen(
             obdStatus, pairedDevices, nearbyDevices, obdDiscoveryStatus, selectedAddress, onPermissions, onSelectObd,
-            onDiscoverObd, onPairOrSelectNearbyObd, onOpenOfflineMaps = { refreshRegionalDiscovery(); onNavigate(AppScreen.OFFLINE_MAPS) }, onBack = { onNavigate(AppScreen.MAIN) }
+            onDiscoverObd, onPairOrSelectNearbyObd, settingsRecoveryCapability, onOpenAndroidPermissionSettings,
+            onOpenOfflineMaps = { refreshRegionalDiscovery(); onNavigate(AppScreen.OFFLINE_MAPS) }, onBack = { onNavigate(AppScreen.MAIN) }
         )
         AppScreen.DEVELOPER -> RecorderMapScreen(
             developerMode = true, onOpenSettings = { onNavigate(AppScreen.SETTINGS) }, onOpenDeveloper = {}, onOpenPedestrianRecording = { onNavigate(AppScreen.PEDESTRIAN_RECORDING) }, onOpenOfflineMaps = { refreshRegionalDiscovery(); onNavigate(AppScreen.OFFLINE_MAPS) },
@@ -778,6 +842,8 @@ private fun SettingsScreen(
     onSelectObd: (String) -> Unit,
     onDiscoverObd: () -> Unit,
     onPairOrSelectNearbyObd: (NearbyObdDevice) -> Unit,
+    settingsRecoveryCapability: SettingsRecoveryCapability,
+    onOpenAndroidPermissionSettings: () -> Unit,
     onOpenOfflineMaps: () -> Unit,
     onBack: () -> Unit
 ) {
@@ -785,6 +851,12 @@ private fun SettingsScreen(
         Text("SETTINGS")
         Text("Permissions and vehicle connection")
         Button(onClick = onPermissions) { Text("GRANT / REFRESH PERMISSIONS") }
+        Button(
+            enabled = settingsRecoveryCapability.isAvailable,
+            onClick = onOpenAndroidPermissionSettings,
+            modifier = Modifier.semantics { contentDescription = settingsRecoveryCapability.accessibilityLabel() }
+        ) { Text("OPEN ANDROID PERMISSION SETTINGS") }
+        if (!settingsRecoveryCapability.isAvailable) Text(settingsRecoveryCapability.disabledReason.orEmpty())
         Button(onClick = onOpenOfflineMaps) { Text("OFFLINE MAPS") }
         Text(obdStatus)
         Text("OBD ADAPTER")
@@ -1380,6 +1452,8 @@ private fun RecorderMapScreen(
                         exportPreparing = false
                     }
                 }
+                onBack?.let { Button(onClick = it) { Text("EXIT DEVELOPER MODE") } }
+            } else {
                 if (installedDestinationIndex == null) {
                     Button(onClick = {
                         onInstallDestinationIndex()
@@ -1392,8 +1466,6 @@ private fun RecorderMapScreen(
                     Text("OFFLINE DESTINATION INDEX READY · SEARCH ONLY", color = Color(0xFF1B5E20))
                 }
                 destinationIndexInstallMessage?.let { Text(it, color = Color(0xFF6A1B9A)) }
-                onBack?.let { Button(onClick = it) { Text("EXIT DEVELOPER MODE") } }
-            } else {
                 Button(onClick = {
                     destinationSearch = DestinationSearchSelectionReducer.open(destinationSearch)
                     menuOpen = false

@@ -80,7 +80,12 @@ object ActiveRouteGuidancePresentationFactory {
                 ActiveRoutePhase.LOW_CONFIDENCE -> "POSITION CONFIDENCE LOW"
                 ActiveRoutePhase.OFF_ROUTE -> "OFF ROUTE"
                 ActiveRoutePhase.REROUTE_REQUIRED -> "REROUTE REQUIRED"
+                ActiveRoutePhase.PAUSE_REQUESTED -> "PAUSING GUIDANCE"
+                ActiveRoutePhase.PAUSED -> "GUIDANCE PAUSED"
+                ActiveRoutePhase.RESUME_AWAITING_FRESH_OBSERVATIONS -> "WAITING FOR FRESH POSITION AND SENSOR DATA"
+                ActiveRoutePhase.RESUMED -> "GUIDANCE RESUMED"
                 ActiveRoutePhase.ARRIVED -> "ARRIVED"
+                ActiveRoutePhase.CANCELLED -> "NAVIGATION CANCELLED"
                 ActiveRoutePhase.UNAVAILABLE -> "NAVIGATION POSITION UNAVAILABLE"
                 ActiveRoutePhase.STOPPED -> "NAVIGATION STOPPED"
             },
@@ -94,8 +99,8 @@ object ActiveRouteGuidancePresentationFactory {
             sourceLabel = state.confirmedPlan!!.candidate.origin.source.name,
             confidenceLabel = confidence?.name,
             accuracyLabel = state.estimatedAccuracyMeters?.let { "±${"%.0f".format(java.util.Locale.US, it)} m" },
-            canStop = phase != ActiveRoutePhase.STOPPED,
-            canChooseNewDestination = phase in setOf(ActiveRoutePhase.ARRIVED, ActiveRoutePhase.STOPPED, ActiveRoutePhase.REROUTE_REQUIRED)
+            canStop = phase !in setOf(ActiveRoutePhase.STOPPED, ActiveRoutePhase.CANCELLED),
+            canChooseNewDestination = phase in setOf(ActiveRoutePhase.ARRIVED, ActiveRoutePhase.CANCELLED, ActiveRoutePhase.STOPPED, ActiveRoutePhase.REROUTE_REQUIRED)
         )
     }
 

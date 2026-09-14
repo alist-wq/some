@@ -84,6 +84,10 @@ fun externalEvidenceStatusLabel(status: com.example.navigation.gnss.ExternalEvid
 
 object GnssTrustExportReport {
     fun render(decisions: List<GnssEpochTrustDecision>): String = GnssTrustSessionReportWriter().render(decisions)
+
+    /** Caller supplies samples only after the existing explicit diagnostics-export action. */
+    fun renderDiagnosticsTimeline(samples: List<DiagnosticsTimelineSample>): String =
+        DiagnosticsTimelineExport.render(samples)
 }
 
 fun GnssTrustNavigationSnapshot.toDiagnostics(external: ExternalEvidenceSnapshot = ExternalEvidenceSnapshot()) = NavigationDiagnostics(

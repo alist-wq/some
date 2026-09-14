@@ -20,7 +20,8 @@ fun interface GameRotationVectorListener {
 class AndroidGameRotationVectorProvider(
     private val sensorManager: SensorManager,
     callbackLooper: Looper,
-    private val listener: GameRotationVectorListener
+    private val listener: GameRotationVectorListener,
+    private val accuracyListener: (Int) -> Unit = {}
 ) {
     private val callbackHandler = Handler(callbackLooper)
     private val sensor = sensorManager.getDefaultSensor(Sensor.TYPE_GAME_ROTATION_VECTOR)
@@ -37,7 +38,7 @@ class AndroidGameRotationVectorProvider(
             ))
         }
 
-        override fun onAccuracyChanged(sensor: Sensor, accuracy: Int) = Unit
+        override fun onAccuracyChanged(sensor: Sensor, accuracy: Int) = accuracyListener(accuracy)
     }
 
     /** Returns false when the device does not provide a game rotation vector. */
