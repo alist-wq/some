@@ -2,6 +2,7 @@ package com.example.navigation.maps
 
 import android.content.Context
 import java.security.MessageDigest
+import java.util.concurrent.Executors
 
 /** Approved small starter package. Downloads are always initiated by an explicit UI confirmation. */
 object ProductionRegionalMapCatalog {
@@ -14,6 +15,8 @@ object ProductionRegionalMapCatalog {
     )
 
     val catalog = RegionalMapCatalog("2026-09", listOf(
+        // This ID is deliberately identical to the approved BRouter package ID. It is the
+        // explicit map/package association required before an opt-in BRouter install may run.
         packageFor("ua-kharkiv-pedestrian", "Kharkiv, Ukraine", RegionalMapBounds(49.80, 35.90, 50.20, 36.50), 120_000_000L),
         packageFor("ua-lviv", "Lviv, Ukraine", RegionalMapBounds(49.70, 23.75, 50.05, 24.25), 85_000_000L)
     ))
@@ -33,13 +36,25 @@ class ActiveRegionalMapStore(context: Context) {
     fun clear() { preferences.edit().clear().apply() }
 }
 
-class ProductionRegionalMapRuntime(context: Context, private val onStateChanged: (RegionalMapDownloadState) -> Unit) {
+class ProductionRegionalMapRuntime(
+    context: Context,
+    private val onStateChanged: (RegionalMapDownloadState) -> Unit,
+    private val onBrouterInstallationStateChanged: (BrouterPackageInstallationState) -> Unit = {}
+) {
     private val metadata = MapDataVersionMetadataStore(context)
     private val manager = MapLibreOfflineRegionManager(context, metadata)
     private val activeStore = ActiveRegionalMapStore(context)
     private val stateStore = PreferencesRegionalMapDownloadStateStore(context)
+    val brouterRuntime = ProductionBrouterPackageRuntime(context.filesDir.toPath(), ::activePackage)
     /** Destination search data is managed separately and never represents a routing graph. */
     val destinationIndexRuntime = ProductionDestinationIndexPackageRuntime(context.filesDir.toPath(), ::activePackage)
+    private val brouterHandoff = BrouterPackageInstallationHandoff(
+        backgroundExecutor = Executors.newSingleThreadExecutor(),
+        activeMapPackage = ::activePackage,
+        installForActiveMap = brouterRuntime::installForActiveMap,
+        onStateChanged = onBrouterInstallationStateChanged,
+        store = PreferencesBrouterPackageInstallationStateStore(context)
+    )
     val orchestrator = RegionalMapDownloadOrchestrator(
         MapLibreRegionalMapDownloadBackend(manager),
         RegionalMapPackageVerifier { packageInfo, regionId, bytes ->
@@ -48,15 +63,21 @@ class ProductionRegionalMapRuntime(context: Context, private val onStateChanged:
                 record?.mapVersion ?: "", bytes, if (ProductionRegionalMapCatalog.isApproved(packageInfo)) packageInfo.sha256 else "", bytes > 0L
             )
         },
-        RegionalMapActivator { packageInfo, _ -> activeStore.activate(packageInfo) }, stateStore, onStateChanged
+        RegionalMapActivator { packageInfo, _ ->
+            activeStore.activate(packageInfo)
+            brouterHandoff.observeActivatedMap(packageInfo)
+        }, stateStore, onStateChanged
     )
     init {
+        brouterRuntime.recoverInterruptedDownloads()
         destinationIndexRuntime.recoverInterruptedDownloads()
+        brouterHandoff.recoverInterruptedWork()
     }
     fun activePackage(): RegionalMapPackage? = activeStore.active(ProductionRegionalMapCatalog.catalog)
     fun removeActive(onDone: () -> Unit, onError: (String) -> Unit) {
         val id = orchestrator.state.regionId ?: return onDone()
         manager.delete(id, {
+            brouterRuntime.removeForActiveMap()
             destinationIndexRuntime.removeForActiveMap()
             activeStore.clear(); stateStore.clear(); onStateChanged(RegionalMapDownloadState()); onDone()
         }, onError)

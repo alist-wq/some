@@ -30,7 +30,8 @@ class EmbeddedBrouterRoutingAdapterTest {
 
         assertEquals(first.routeId, second.routeId)
         assertEquals(67, first.geometry.size)
-        assertEquals("2026.09.09-1", first.packageVersion)
+        assertEquals("2026.09.10-1", first.packageVersion)
+        assertEquals("renav-pedestrian-1", first.profileVersion)
         assertTrue(first.distanceMeters > 0)
     }
 

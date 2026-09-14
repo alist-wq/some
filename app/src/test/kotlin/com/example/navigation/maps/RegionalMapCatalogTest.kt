@@ -1,6 +1,7 @@
 package com.example.navigation.maps
 
 import com.example.navigation.routing.GeoPoint
+import com.example.navigation.routing.ProductionBrouterPackageCatalog
 import org.junit.Assert.assertEquals
 import org.junit.Test
 
@@ -30,6 +31,14 @@ class RegionalMapCatalogTest {
         assertEquals(RegionalMapAvailability.READY, RegionalMapAvailabilityEvaluator.evaluate(ukraine, InstalledRegionalMapEvidence("v1", 10, hash, true)))
         assertEquals(RegionalMapAvailability.STALE, RegionalMapAvailabilityEvaluator.evaluate(ukraine, InstalledRegionalMapEvidence("old", 10, hash, true)))
         assertEquals(RegionalMapAvailability.CORRUPT, RegionalMapAvailabilityEvaluator.evaluate(ukraine, InstalledRegionalMapEvidence("v1", 10, "b".repeat(64), true)))
+    }
+
+    @Test fun `approved Kharkiv map package matches the BRouter package contract`() {
+        val kharkiv = ProductionRegionalMapCatalog.catalog.packages.single { it.id == ProductionBrouterPackageCatalog.REGION_ID }
+
+        assertEquals("Kharkiv, Ukraine", kharkiv.displayName)
+        assertEquals(ProductionBrouterPackageCatalog.MAP_COMPATIBILITY_VERSION, kharkiv.mapVersion)
+        assertEquals("unavailable", kharkiv.routingGraphVersion)
     }
 
     private fun packageInfo(id: String, bounds: RegionalMapBounds) = RegionalMapPackage(
