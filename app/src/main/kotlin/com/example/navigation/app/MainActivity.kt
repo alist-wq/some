@@ -85,6 +85,7 @@ import com.example.navigation.maps.RegionalMapDownloadState
 import com.example.navigation.maps.RegionalMapDownloadPhase
 import com.example.navigation.maps.ProductionRegionalMapCatalog
 import com.example.navigation.maps.ProductionRegionalMapRuntime
+import com.example.navigation.maps.ProductionBrouterPackageRuntime
 import com.example.navigation.maps.RegionalMapResolver
 import com.example.navigation.maps.RegionalMapPackage
 import com.example.navigation.routing.GeoPoint
@@ -96,9 +97,8 @@ import com.example.navigation.routing.ActiveRouteLifecycle
 import com.example.navigation.routing.ActiveRouteState
 import com.example.navigation.routing.ConfirmedDestination
 import com.example.navigation.routing.ConfirmedRoutePlan
-import com.example.navigation.routing.RoutePlanningUseCase
+import com.example.navigation.routing.PedestrianBrouterRoutePlanningUseCase
 import com.example.navigation.routing.RoutePlanningState
-import com.example.navigation.routing.SyntheticDestinationJourneyFixture
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -599,8 +599,15 @@ private fun NavigationAppScreen(
     val reducedMotion = remember(context) { context.motionAccessibilityPreference().reducedMotion }
     var regionalDiscovery by remember { mutableStateOf<RegionDiscoveryResult>(RegionDiscoveryResult.CatalogUnavailable) }
     var regionalDownload by remember { mutableStateOf(RegionalMapDownloadState()) }
+    var brouterInstallation by remember { mutableStateOf(com.example.navigation.maps.BrouterPackageInstallationState()) }
     val mapRuntime = remember(context) {
-        ProductionRegionalMapRuntime(context, onStateChanged = { regionalDownload = it })
+        ProductionRegionalMapRuntime(
+            context,
+            onStateChanged = { regionalDownload = it },
+            onBrouterInstallationStateChanged = { state ->
+                Handler(Looper.getMainLooper()).post { brouterInstallation = state }
+            }
+        )
     }
     var activeRegionalPackage by remember { mutableStateOf(mapRuntime.activePackage()) }
     var destinationIndexRefresh by remember { mutableIntStateOf(0) }
@@ -652,6 +659,7 @@ private fun NavigationAppScreen(
             controller, navigationMapState, recording, message, obdStatus, pairedDevices, selectedAddress,
             savedSessions, selectedSessionPaths, onSelectObd, onPermissions, onStart, onStop, onMark, onToggleSession, onExport,
             installedDestinationIndex = installedDestinationIndex,
+            brouterRuntime = mapRuntime.brouterRuntime,
             destinationIndexInstallMessage = destinationIndexInstallMessage,
             onInstallDestinationIndex = ::installDestinationIndexForActiveMap
         )
@@ -665,6 +673,7 @@ private fun NavigationAppScreen(
             controller, navigationMapState, recording, message, obdStatus, pairedDevices, selectedAddress,
             savedSessions, selectedSessionPaths, onSelectObd, onPermissions, onStart, onStop, onMark, onToggleSession, onExport,
             onBack = { onNavigate(AppScreen.MAIN) }, installedDestinationIndex = installedDestinationIndex,
+            brouterRuntime = mapRuntime.brouterRuntime,
             destinationIndexInstallMessage = destinationIndexInstallMessage,
             onInstallDestinationIndex = ::installDestinationIndexForActiveMap
         )
@@ -680,6 +689,7 @@ private fun NavigationAppScreen(
         )
         AppScreen.OFFLINE_MAPS -> MapDownloadScreen(
             presentation = RegionalMapDownloadPresentationFactory.create(regionalDiscovery, regionalDownload),
+            brouterInstallation = BrouterInstallationPresentationFactory.create(brouterInstallation),
             onRequestPermission = onPermissions,
             manualPackages = ProductionRegionalMapCatalog.catalog.packages,
             onManualRegion = { regionalDiscovery = RegionDiscoveryResult.LocationUnavailable },
@@ -696,6 +706,10 @@ private fun NavigationAppScreen(
                 }
                 activeRegionalPackage = mapRuntime.activePackage()
                 RenavDiagnostics.event("regional_map_ui_action", "action=$action")
+            },
+            onInstallBrouter = {
+                mapRuntime.requestBrouterInstallationForActiveMap()
+                RenavDiagnostics.event("brouter_install_requested")
             },
             onBack = { onNavigate(AppScreen.MAIN) }
         )
@@ -759,11 +773,13 @@ private fun PedestrianFieldRecordingScreen(
 @Composable
 private fun MapDownloadScreen(
     presentation: RegionalMapDownloadPresentation,
+    brouterInstallation: BrouterInstallationPresentation,
     manualPackages: List<RegionalMapPackage>,
     onRequestPermission: () -> Unit,
     onManualRegion: () -> Unit,
     onSelectManualRegion: (RegionalMapPackage) -> Unit,
     onDownloadAction: (RegionalMapPrimaryAction) -> Unit,
+    onInstallBrouter: () -> Unit,
     onBack: () -> Unit
 ) {
     val context = LocalContext.current
@@ -813,6 +829,17 @@ private fun MapDownloadScreen(
                 onClick = { runAction(presentation.secondaryAction) },
                 modifier = Modifier.semantics { contentDescription = "${actionLabel(presentation.secondaryAction)} for offline map" }
             ) { Text(actionLabel(presentation.secondaryAction)) }
+        }
+        if (brouterInstallation.visible) {
+            Text(brouterInstallation.status, fontWeight = FontWeight.Bold)
+            Text(brouterInstallation.detail)
+            brouterInstallation.actionLabel?.let { label ->
+                Button(
+                    enabled = brouterInstallation.canRequestInstallation,
+                    onClick = onInstallBrouter,
+                    modifier = Modifier.semantics { contentDescription = "Install verified pedestrian routing package" }
+                ) { Text(label) }
+            }
         }
         if (presentation.ready) Text("OFFLINE NAVIGATION READY", color = Color(0xFF2E7D32), fontWeight = FontWeight.Bold)
         Button(onClick = onBack, modifier = Modifier.semantics { contentDescription = "Back to navigation" }) { Text("BACK TO NAVIGATION") }
@@ -903,10 +930,12 @@ private fun RecorderMapScreen(
     onExport: () -> Unit,
     onBack: (() -> Unit)? = null,
     installedDestinationIndex: OfflineDestinationSearchIndex? = null,
+    brouterRuntime: ProductionBrouterPackageRuntime,
     destinationIndexInstallMessage: String? = null,
     onInstallDestinationIndex: () -> Unit = {}
 ) {
     val context = LocalContext.current
+    val routePlanningScope = rememberCoroutineScope()
     val reducedMotion = remember(context) { context.motionAccessibilityPreference().reducedMotion }
     var tick by remember { mutableLongStateOf(0L) }
     var activeStyle by remember { mutableStateOf<Style?>(null) }
@@ -923,20 +952,10 @@ private fun RecorderMapScreen(
     }
     val manualOriginTracker = remember { ManualOriginTracker() }
     var manualTrackingState by remember { mutableStateOf(ManualOriginTrackingState()) }
-    // The synthetic package exists only in debug builds so the full destination journey can be
-    // exercised before a real regional package is available. It is never a production fallback.
-    val syntheticJourneyFixture = remember {
-        if ((context.applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE) != 0) {
-            SyntheticDestinationJourneyFixture()
-        } else {
-            null
-        }
-    }
-    // A real installed index takes precedence. The debug fixture is never a production fallback.
-    val destinationIndex = installedDestinationIndex ?: syntheticJourneyFixture?.index
-    val routePlanner = remember { RoutePlanningUseCase() }
+    // Pedestrian route entry is allowed only from installed, verified production packages.
+    val destinationIndex = installedDestinationIndex
+    val pedestrianRoutePlanner = remember { PedestrianBrouterRoutePlanningUseCase() }
     val activeRouteLifecycle = remember { ActiveRouteLifecycle() }
-    var syntheticObservationIndex by remember { mutableIntStateOf(0) }
     var destinationSearch by remember { mutableStateOf(DestinationSearchSelectionState()) }
     var routePlanningState by remember { mutableStateOf(RoutePlanningState()) }
     var activeRouteState by remember { mutableStateOf(ActiveRouteState()) }
@@ -1174,24 +1193,21 @@ private fun RecorderMapScreen(
                 onSelect = { record ->
                     destinationSearch = DestinationSearchSelectionReducer.select(destinationSearch, record)
                     val proposedDestination = destinationSearch.proposedDestination
-                    routePlanningState = if (syntheticJourneyFixture != null && proposedDestination != null) {
-                        routePlanner.plan(
-                            origin = syntheticJourneyFixture.origin,
-                            destination = ConfirmedDestination(
-                                proposedDestination.stableId,
-                                proposedDestination.label,
-                                proposedDestination.coordinate,
-                                proposedDestination.sourcePackage
-                            ),
-                            mode = NavigationMode.VEHICLE,
-                            verifiedGraph = syntheticJourneyFixture.verifiedGraph,
-                            activeRoute = activeRouteState.confirmedPlan?.candidate?.route
-                        )
-                    } else {
-                        RoutePlanningState(
-                            phase = com.example.navigation.routing.RoutePlanningPhase.GRAPH_UNAVAILABLE,
-                            reason = "A compatible regional routing graph is required before route preview."
-                        )
+                    if (proposedDestination != null) {
+                        val activeRoute = activeRouteState.confirmedPlan?.candidate?.route
+                        val origin = pedestrianRoutePlanningOrigin(manualTrackingState, navigationMapState.estimatedPosition)
+                        routePlanningState = pedestrianRoutePlanner.planning(activeRoute)
+                        routePlanningScope.launch {
+                            val plan = withContext(Dispatchers.IO) {
+                                pedestrianRoutePlanner.plan(
+                                    origin,
+                                    ConfirmedDestination(proposedDestination.stableId, proposedDestination.label, proposedDestination.coordinate, proposedDestination.sourcePackage),
+                                    brouterRuntime.activePackage(),
+                                    activeRoute
+                                )
+                            }
+                            routePlanningState = plan
+                        }
                     }
                     RenavDiagnostics.event("destination_proposed", "id=${record.stableId}")
                 },
@@ -1218,7 +1234,6 @@ private fun RecorderMapScreen(
                         activeRouteState = activeRouteLifecycle.start(
                             ConfirmedRoutePlan("debug-${candidate.destination.stableId}", candidate)
                         )
-                        syntheticObservationIndex = 0
                         routePlanningState = RoutePlanningState()
                         RenavDiagnostics.event("route_start_confirmed")
                     }
@@ -1239,18 +1254,8 @@ private fun RecorderMapScreen(
         ) {
             ActiveRouteGuidancePanel(
                 presentation = activeRouteGuidance,
-                showSyntheticAdvance = syntheticJourneyFixture != null &&
-                    activeRouteState.phase !in setOf(
-                        com.example.navigation.routing.ActiveRoutePhase.ARRIVED,
-                        com.example.navigation.routing.ActiveRoutePhase.STOPPED
-                    ),
-                onAdvanceSynthetic = {
-                    syntheticJourneyFixture?.observations()?.getOrNull(syntheticObservationIndex)?.let { observation ->
-                        activeRouteState = activeRouteLifecycle.observe(observation)
-                        syntheticObservationIndex++
-                        RenavDiagnostics.event("synthetic_route_advanced", "step=$syntheticObservationIndex phase=${activeRouteState.phase}")
-                    }
-                },
+                showSyntheticAdvance = false,
+                onAdvanceSynthetic = {},
                 onStop = {
                     activeRouteState = activeRouteLifecycle.stop()
                     RenavDiagnostics.event("active_route_stop_requested")

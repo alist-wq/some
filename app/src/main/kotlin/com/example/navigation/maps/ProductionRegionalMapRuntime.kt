@@ -74,6 +74,9 @@ class ProductionRegionalMapRuntime(
         brouterHandoff.recoverInterruptedWork()
     }
     fun activePackage(): RegionalMapPackage? = activeStore.active(ProductionRegionalMapCatalog.catalog)
+    val brouterInstallationState: BrouterPackageInstallationState get() = brouterHandoff.state
+    /** Starts package retrieval only after an explicit UI request. */
+    fun requestBrouterInstallationForActiveMap() = brouterHandoff.requestInstallationForActiveMap()
     fun removeActive(onDone: () -> Unit, onError: (String) -> Unit) {
         val id = orchestrator.state.regionId ?: return onDone()
         manager.delete(id, {
