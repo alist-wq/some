@@ -17,6 +17,7 @@ NORMALISE = ROOT / "tools/brouter/normalise_rd5_timestamp.py"
 EVIDENCE = ROOT / "tools/brouter/write_build_evidence.py"
 RELEASE_MANIFEST = ROOT / "tools/brouter/write_release_manifest.py"
 VERIFY_INPUT = ROOT / "tools/brouter/verify_locked_input.py"
+BUILD_FIXTURE = ROOT / "tools/brouter/build_fixture.sh"
 
 
 class BuildToolsTest(unittest.TestCase):
@@ -50,6 +51,12 @@ class BuildToolsTest(unittest.TestCase):
         with rd5.open("rb") as stream:
             stream.seek(-113, os.SEEK_END)
             self.assertEqual(struct.unpack(">q", stream.read(8))[0], 42000)
+
+    def test_multi_segment_regression_export_does_not_redeclare_loop_constant(self) -> None:
+        script = BUILD_FIXTURE.read_text(encoding="utf-8")
+        declaration = "readonly REGRESSION_GPX='testtrack0.gpx'"
+        self.assertEqual(1, script.count(declaration))
+        self.assertLess(script.index(declaration), script.index('for index in "${!REGRESSION_ROUTES[@]}"; do'))
 
     def test_canonical_evidence_is_repeatable(self) -> None:
         source = self.directory / "source.pbf"

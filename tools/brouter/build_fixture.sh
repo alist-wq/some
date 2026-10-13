@@ -100,13 +100,13 @@ readonly REGRESSION_ROUTES=(
   '36.2208,50.0035|36.2391,50.0084'
 )
 (( ${#REGRESSION_ROUTES[@]} == ${#SEGMENT_NAMES[@]} )) || { echo "locked segments and regression routes must have equal cardinality" >&2; exit 65; }
+readonly REGRESSION_GPX='testtrack0.gpx'
 pushd "$ARTIFACT_DIR" >/dev/null
 for index in "${!REGRESSION_ROUTES[@]}"; do
   java -Xmx512M -cp "$BROUTER_JAR" btools.server.BRouter . . 0 renav-pedestrian \
     "${REGRESSION_ROUTES[$index]}"
   # BRouter appends the alternative index to its CLI export base, producing
   # testtrack0.gpx for the primary route.
-  readonly REGRESSION_GPX='testtrack0.gpx'
   [[ -s "$REGRESSION_GPX" ]] || { echo "pedestrian regression did not produce a GPX route" >&2; exit 70; }
   python3 "$REPOSITORY_ROOT/tools/brouter/write_regression.py" "$REGRESSION_GPX" "regression-$index.json"
   rm "$REGRESSION_GPX"
