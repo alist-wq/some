@@ -35,7 +35,7 @@ class BuildToolsTest(unittest.TestCase):
                 "PBF_DATE_UTC=2026-09-04T11:12:00Z",
                 f"PBF_SHA256={pbf_hash}",
                 "BROUTER_REVISION=d5c0a75d29b5a036525fd5e9466a6376ee54cc3e",
-                "SEGMENTS=E35_N45.rd5 E35_N50.rd5",
+                'SEGMENTS="E35_N45.rd5 E35_N50.rd5"',
                 "SOURCE_DATE_EPOCH=1788220800",
                 "",
             )),

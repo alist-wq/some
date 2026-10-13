@@ -37,7 +37,13 @@ def main() -> None:
         raise SystemExit("input lock is incomplete")
     if "latest" in values["PBF_URL"]:
         raise SystemExit("mutable latest PBF inputs are forbidden")
-    expected_segments = values["SEGMENTS"].split()
+    # The lock doubles as a sourced POSIX-shell configuration file. Remove the
+    # one enclosing shell quote pair, then retain its whitespace-delimited
+    # segment list for the canonical evidence contract.
+    locked_segments = values["SEGMENTS"]
+    if len(locked_segments) >= 2 and locked_segments[0] == locked_segments[-1] and locked_segments[0] in {"'", '"'}:
+        locked_segments = locked_segments[1:-1]
+    expected_segments = locked_segments.split()
     actual_segments = [path.name for path in args.segment]
     if not expected_segments or actual_segments != expected_segments or len(set(actual_segments)) != len(actual_segments):
         raise SystemExit("segments do not match input lock")
