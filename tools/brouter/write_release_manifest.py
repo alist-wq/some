@@ -27,11 +27,12 @@ def main() -> None:
     args = parser.parse_args()
 
     evidence = json.loads((args.artifacts / "build-evidence.json").read_text(encoding="utf-8"))
-    required = {"E35_N50.rd5", "lookups.dat", "renav-pedestrian.brf", "regression.json"}
-    if {path.name for path in args.artifacts.iterdir() if path.is_file()} < required | {"build-evidence.json"}:
+    segment_names = [item["name"] for item in evidence["artifacts"] if item["name"].endswith(".rd5")]
+    required = {"lookups.dat", "renav-pedestrian.brf", "build-evidence.json"} | set(segment_names)
+    if not segment_names or {path.name for path in args.artifacts.iterdir() if path.is_file()} < required:
         raise SystemExit("release input does not contain the complete verified build artifact")
     evidence_artifacts = {item["name"]: item for item in evidence["artifacts"]}
-    if set(evidence_artifacts) != {"E35_N50.rd5", "lookups.dat", "renav-pedestrian.brf"}:
+    if set(evidence_artifacts) != {"lookups.dat", "renav-pedestrian.brf"} | set(segment_names):
         raise SystemExit("build evidence does not declare the approved Kharkiv artifact set")
     for name, item in evidence_artifacts.items():
         path = args.artifacts / name
@@ -47,7 +48,7 @@ def main() -> None:
         "brouterRevision": evidence["brouterRevision"],
         "profile": {**evidence_artifacts["renav-pedestrian.brf"], "version": args.profile_version},
         "lookup": evidence_artifacts["lookups.dat"],
-        "segments": [evidence_artifacts["E35_N50.rd5"]],
+        "segments": [evidence_artifacts[name] for name in segment_names],
         "regression": evidence["regression"],
         "attribution": "© OpenStreetMap contributors, ODbL 1.0",
     }

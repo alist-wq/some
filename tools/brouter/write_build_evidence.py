@@ -22,8 +22,8 @@ def main() -> None:
     parser.add_argument("--lock", required=True, type=Path)
     parser.add_argument("--lookup", required=True, type=Path)
     parser.add_argument("--profile", required=True, type=Path)
-    parser.add_argument("--segment", required=True, type=Path)
-    parser.add_argument("--regression", required=True, type=Path)
+    parser.add_argument("--segment", required=True, action="append", type=Path)
+    parser.add_argument("--regression", required=True, action="append", type=Path)
     parser.add_argument("--output", required=True, type=Path)
     args = parser.parse_args()
 
@@ -32,13 +32,17 @@ def main() -> None:
         if line and not line.startswith("#"):
             key, value = line.split("=", 1)
             values[key] = value
-    expected = {"REGION_ID", "PBF_URL", "PBF_DATE_UTC", "PBF_SHA256", "BROUTER_REVISION", "SEGMENT", "SOURCE_DATE_EPOCH"}
+    expected = {"REGION_ID", "PBF_URL", "PBF_DATE_UTC", "PBF_SHA256", "BROUTER_REVISION", "SEGMENTS", "SOURCE_DATE_EPOCH"}
     if set(values) != expected or not all(values.values()) or "PENDING" in values["PBF_SHA256"]:
         raise SystemExit("input lock is incomplete")
     if "latest" in values["PBF_URL"]:
         raise SystemExit("mutable latest PBF inputs are forbidden")
-    if args.segment.name != values["SEGMENT"]:
-        raise SystemExit("segment does not match input lock")
+    expected_segments = values["SEGMENTS"].split()
+    actual_segments = [path.name for path in args.segment]
+    if not expected_segments or actual_segments != expected_segments or len(set(actual_segments)) != len(actual_segments):
+        raise SystemExit("segments do not match input lock")
+    if len(args.regression) != len(args.segment):
+        raise SystemExit("each locked segment requires deterministic regression evidence")
 
     evidence = {
         "schemaVersion": 1,
@@ -53,9 +57,9 @@ def main() -> None:
         "artifacts": [
             {"name": "lookups.dat", "sha256": sha256(args.lookup), "bytes": args.lookup.stat().st_size},
             {"name": "renav-pedestrian.brf", "sha256": sha256(args.profile), "bytes": args.profile.stat().st_size},
-            {"name": args.segment.name, "sha256": sha256(args.segment), "bytes": args.segment.stat().st_size},
+            *({"name": segment.name, "sha256": sha256(segment), "bytes": segment.stat().st_size} for segment in args.segment),
         ],
-        "regression": json.loads(args.regression.read_text(encoding="utf-8")),
+        "regression": [json.loads(regression.read_text(encoding="utf-8")) for regression in args.regression],
     }
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(evidence, sort_keys=True, separators=(",", ":")) + "\n", encoding="utf-8")

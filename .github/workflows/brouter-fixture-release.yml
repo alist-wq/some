@@ -62,7 +62,7 @@ jobs:
           set -euo pipefail
           tag="brouter-ua-kharkiv-pedestrian-${{ inputs.package_version }}"
           if ! gh release view "$tag" >/dev/null 2>&1; then
-            gh release create "$tag" one/E35_N50.rd5 one/lookups.dat one/renav-pedestrian.brf one/regression.json one/manifest.json one/manifest.json.sig one/renav-brouter-ed25519.pub one/renav-brouter-ed25519.fingerprint --title "RENAV Kharkiv pedestrian ${{ inputs.package_version }}" --notes "Signed offline BRouter pedestrian fixture. © OpenStreetMap contributors, ODbL 1.0."
+            gh release create "$tag" one/*.rd5 one/lookups.dat one/renav-pedestrian.brf one/regression-*.json one/manifest.json one/manifest.json.sig one/renav-brouter-ed25519.pub one/renav-brouter-ed25519.fingerprint --title "RENAV Kharkiv pedestrian ${{ inputs.package_version }}" --notes "Signed offline BRouter pedestrian fixture. © OpenStreetMap contributors, ODbL 1.0."
           fi
       - name: Publish immutable public fixture mirror
         env:
@@ -77,4 +77,4 @@ jobs:
             gh api --method PUT "repos/$repository/contents/README.md" -f message='docs: initialize fixture repository' -f content="$(base64 -w 0 README.md)" >/dev/null
           fi
           ! gh release view "$tag" --repo "$repository" >/dev/null 2>&1
-          gh release create "$tag" --repo "$repository" --target main one/E35_N50.rd5 one/lookups.dat one/renav-pedestrian.brf one/regression.json one/manifest.json one/manifest.json.sig one/renav-brouter-ed25519.pub one/renav-brouter-ed25519.fingerprint --title "RENAV Kharkiv pedestrian ${{ inputs.package_version }}" --notes "Signed offline BRouter pedestrian fixture. © OpenStreetMap contributors, ODbL 1.0."
+          gh release create "$tag" --repo "$repository" --target main one/*.rd5 one/lookups.dat one/renav-pedestrian.brf one/regression-*.json one/manifest.json one/manifest.json.sig one/renav-brouter-ed25519.pub one/renav-brouter-ed25519.fingerprint --title "RENAV Kharkiv pedestrian ${{ inputs.package_version }}" --notes "Signed offline BRouter pedestrian fixture. © OpenStreetMap contributors, ODbL 1.0."

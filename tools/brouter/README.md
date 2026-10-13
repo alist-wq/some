@@ -10,4 +10,4 @@ tools/brouter/build_fixture.sh \
   --work /tmp/renav-brouter-build
 ```
 
-The input must match [the committed lock](locked-inputs/ua-kharkiv-pedestrian.env) exactly. Output lives only beneath `--work/artifacts` and contains `lookups.dat`, `renav-pedestrian.brf`, `E35_N50.rd5`, deterministic pedestrian regression evidence, and canonical `build-evidence.json`. TASK 152 is the only task permitted to sign or publish those outputs.
+The input must match [the committed lock](locked-inputs/ua-kharkiv-pedestrian.env) exactly. Output lives only beneath `--work/artifacts` and contains `lookups.dat`, `renav-pedestrian.brf`, `E35_N45.rd5`, `E35_N50.rd5`, deterministic pedestrian regression evidence for both grid cells, and canonical `build-evidence.json`. TASK 152 is the only task permitted to sign or publish those outputs.

@@ -35,7 +35,7 @@ class BuildToolsTest(unittest.TestCase):
                 "PBF_DATE_UTC=2026-09-04T11:12:00Z",
                 f"PBF_SHA256={pbf_hash}",
                 "BROUTER_REVISION=d5c0a75d29b5a036525fd5e9466a6376ee54cc3e",
-                "SEGMENT=E35_N50.rd5",
+                "SEGMENTS=E35_N45.rd5 E35_N50.rd5",
                 "SOURCE_DATE_EPOCH=1788220800",
                 "",
             )),
@@ -57,18 +57,26 @@ class BuildToolsTest(unittest.TestCase):
         lock = self.write_lock(hashlib.sha256(source.read_bytes()).hexdigest())
         lookup = self.directory / "lookups.dat"
         profile = self.directory / "renav-pedestrian.brf"
-        segment = self.directory / "E35_N50.rd5"
-        regression = self.directory / "regression.json"
+        first_segment = self.directory / "E35_N45.rd5"
+        second_segment = self.directory / "E35_N50.rd5"
+        first_regression = self.directory / "regression-0.json"
+        second_regression = self.directory / "regression-1.json"
         lookup.write_bytes(b"lookup")
         profile.write_text("profile", encoding="utf-8")
-        segment.write_bytes(b"segment")
-        regression.write_text('{"geometrySha256":"abc","pointCount":2}\n', encoding="utf-8")
+        first_segment.write_bytes(b"first segment")
+        second_segment.write_bytes(b"second segment")
+        first_regression.write_text('{"geometrySha256":"abc","pointCount":2}\n', encoding="utf-8")
+        second_regression.write_text('{"geometrySha256":"def","pointCount":3}\n', encoding="utf-8")
         first, second = self.directory / "one.json", self.directory / "two.json"
-        arguments = [sys.executable, EVIDENCE, "--lock", lock, "--lookup", lookup, "--profile", profile, "--segment", segment, "--regression", regression]
+        arguments = [sys.executable, EVIDENCE, "--lock", lock, "--lookup", lookup, "--profile", profile,
+                     "--segment", first_segment, "--segment", second_segment,
+                     "--regression", first_regression, "--regression", second_regression]
         subprocess.run(arguments + ["--output", first], check=True)
         subprocess.run(arguments + ["--output", second], check=True)
         self.assertEqual(first.read_bytes(), second.read_bytes())
-        self.assertEqual(json.loads(first.read_text())["artifacts"][2]["name"], "E35_N50.rd5")
+        evidence = json.loads(first.read_text())
+        self.assertEqual(["E35_N45.rd5", "E35_N50.rd5"], [item["name"] for item in evidence["artifacts"][2:]])
+        self.assertEqual(2, len(evidence["regression"]))
 
     def test_corrupt_or_mutable_input_is_rejected_before_build(self) -> None:
         pbf = self.directory / "source.pbf"
@@ -84,21 +92,22 @@ class BuildToolsTest(unittest.TestCase):
     def test_release_manifest_requires_exact_evidence_and_artifacts(self) -> None:
         artifacts = self.directory / "artifacts"
         artifacts.mkdir()
-        lookup, profile, segment = artifacts / "lookups.dat", artifacts / "renav-pedestrian.brf", artifacts / "E35_N50.rd5"
+        lookup, profile = artifacts / "lookups.dat", artifacts / "renav-pedestrian.brf"
+        first_segment, second_segment = artifacts / "E35_N45.rd5", artifacts / "E35_N50.rd5"
         lookup.write_bytes(b"lookup")
         profile.write_bytes(b"profile")
-        segment.write_bytes(b"segment")
-        regression = artifacts / "regression.json"
-        regression.write_text('{"geometrySha256":"abc","pointCount":2}\n', encoding="utf-8")
+        first_segment.write_bytes(b"first segment")
+        second_segment.write_bytes(b"second segment")
+        regression = [{"geometrySha256": "abc", "pointCount": 2}, {"geometrySha256": "def", "pointCount": 3}]
         evidence = {
             "regionId": "ua-kharkiv-pedestrian",
             "source": {"pbfUrl": "https://example.invalid/ukraine-260901.osm.pbf", "pbfDateUtc": "2026-09-04T11:12:00Z", "pbfSha256": "a" * 64},
             "brouterRevision": "d5c0a75d29b5a036525fd5e9466a6376ee54cc3e",
             "artifacts": [
                 {"name": path.name, "sha256": hashlib.sha256(path.read_bytes()).hexdigest(), "bytes": path.stat().st_size}
-                for path in (lookup, profile, segment)
+                for path in (lookup, profile, first_segment, second_segment)
             ],
-            "regression": json.loads(regression.read_text()),
+            "regression": regression,
         }
         (artifacts / "build-evidence.json").write_text(json.dumps(evidence), encoding="utf-8")
         output = artifacts / "manifest.json"
@@ -106,8 +115,8 @@ class BuildToolsTest(unittest.TestCase):
         manifest = json.loads(output.read_text())
         self.assertEqual("ua-kharkiv-pedestrian", manifest["regionId"])
         self.assertEqual("renav-pedestrian-1", manifest["profile"]["version"])
-        self.assertEqual(["E35_N50.rd5"], [entry["name"] for entry in manifest["segments"]])
-        segment.write_bytes(b"corrupt")
+        self.assertEqual(["E35_N45.rd5", "E35_N50.rd5"], [entry["name"] for entry in manifest["segments"]])
+        first_segment.write_bytes(b"corrupt")
         self.assertNotEqual(subprocess.run([sys.executable, RELEASE_MANIFEST, "--artifacts", artifacts, "--package-version", "2026.09.04-1", "--profile-version", "renav-pedestrian-1", "--map-compatibility-version", "openfreemap-2026-09", "--output", output]).returncode, 0)
 
 

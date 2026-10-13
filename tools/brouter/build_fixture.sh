@@ -78,30 +78,45 @@ java -Xmx6144M -Xms6144M -cp "$BROUTER_JAR" -DuseDenseMaps=true -DskipEncodingCh
   btools.mapcreator.WayLinker "$MAP_DIR/unodes55" "$MAP_DIR/waytiles55" "$MAP_DIR/bordernodes.dat" \
   "$MAP_DIR/restrictions.dat" "$PROFILE_DIR/lookups.dat" "$PROFILE_DIR/renav-pedestrian.brf" "$MAP_DIR/segments" rd5
 
-readonly SEGMENT_PATH="$MAP_DIR/segments/$SEGMENT"
-[[ -s "$SEGMENT_PATH" ]] || { echo "expected Kharkiv segment was not created: $SEGMENT" >&2; exit 70; }
-python3 "$REPOSITORY_ROOT/tools/brouter/normalise_rd5_timestamp.py" "$SEGMENT_PATH" --epoch "$SOURCE_DATE_EPOCH"
+read -r -a SEGMENT_NAMES <<< "${SEGMENTS:?input lock must declare SEGMENTS}"
+(( ${#SEGMENT_NAMES[@]} > 0 )) || { echo "input lock did not declare any BRouter segments" >&2; exit 65; }
+for segment in "${SEGMENT_NAMES[@]}"; do
+  SEGMENT_PATH="$MAP_DIR/segments/$segment"
+  [[ -s "$SEGMENT_PATH" ]] || { echo "expected Kharkiv segment was not created: $segment" >&2; exit 70; }
+  python3 "$REPOSITORY_ROOT/tools/brouter/normalise_rd5_timestamp.py" "$SEGMENT_PATH" --epoch "$SOURCE_DATE_EPOCH"
+done
 cp "$PROFILE_DIR/lookups.dat" "$ARTIFACT_DIR/lookups.dat"
 cp "$PROFILE_DIR/renav-pedestrian.brf" "$ARTIFACT_DIR/renav-pedestrian.brf"
-cp "$SEGMENT_PATH" "$ARTIFACT_DIR/$SEGMENT"
+for segment in "${SEGMENT_NAMES[@]}"; do
+  cp "$MAP_DIR/segments/$segment" "$ARTIFACT_DIR/$segment"
+done
 
-# A deterministic pedestrian regression inside E35_N50 (longitude 35–40,
-# latitude 50–55). The normalized output contains only route geometry, not
-# generated timestamps or logs.
-readonly REGRESSION_ROUTE='36.2208,50.0035|36.2391,50.0084'
+# Deterministic pedestrian regressions cover both required cells. The first
+# is the central Kharkiv route that previously exposed the N50-only defect;
+# the second protects continuity above latitude 50.0. Outputs contain route
+# geometry only, never generated timestamps or logs.
+readonly REGRESSION_ROUTES=(
+  '36.23040,49.99350|36.23706,49.99602'
+  '36.2208,50.0035|36.2391,50.0084'
+)
+(( ${#REGRESSION_ROUTES[@]} == ${#SEGMENT_NAMES[@]} )) || { echo "locked segments and regression routes must have equal cardinality" >&2; exit 65; }
 pushd "$ARTIFACT_DIR" >/dev/null
-java -Xmx512M -cp "$BROUTER_JAR" btools.server.BRouter . . 0 renav-pedestrian \
-  "$REGRESSION_ROUTE"
-# BRouter appends the alternative index to its CLI export base, producing
-# testtrack0.gpx for the primary route.
-readonly REGRESSION_GPX='testtrack0.gpx'
-[[ -s "$REGRESSION_GPX" ]] || { echo "pedestrian regression did not produce a GPX route" >&2; exit 70; }
-python3 "$REPOSITORY_ROOT/tools/brouter/write_regression.py" "$REGRESSION_GPX" regression.json
-rm "$REGRESSION_GPX"
+for index in "${!REGRESSION_ROUTES[@]}"; do
+  java -Xmx512M -cp "$BROUTER_JAR" btools.server.BRouter . . 0 renav-pedestrian \
+    "${REGRESSION_ROUTES[$index]}"
+  # BRouter appends the alternative index to its CLI export base, producing
+  # testtrack0.gpx for the primary route.
+  readonly REGRESSION_GPX='testtrack0.gpx'
+  [[ -s "$REGRESSION_GPX" ]] || { echo "pedestrian regression did not produce a GPX route" >&2; exit 70; }
+  python3 "$REPOSITORY_ROOT/tools/brouter/write_regression.py" "$REGRESSION_GPX" "regression-$index.json"
+  rm "$REGRESSION_GPX"
+done
 popd >/dev/null
 
-python3 "$REPOSITORY_ROOT/tools/brouter/write_build_evidence.py" \
-  --lock "$LOCK_FILE" --lookup "$ARTIFACT_DIR/lookups.dat" --profile "$ARTIFACT_DIR/renav-pedestrian.brf" \
-  --segment "$ARTIFACT_DIR/$SEGMENT" --regression "$ARTIFACT_DIR/regression.json" --output "$ARTIFACT_DIR/build-evidence.json"
+evidence_arguments=(--lock "$LOCK_FILE" --lookup "$ARTIFACT_DIR/lookups.dat" --profile "$ARTIFACT_DIR/renav-pedestrian.brf")
+for index in "${!SEGMENT_NAMES[@]}"; do
+  evidence_arguments+=(--segment "$ARTIFACT_DIR/${SEGMENT_NAMES[$index]}" --regression "$ARTIFACT_DIR/regression-$index.json")
+done
+python3 "$REPOSITORY_ROOT/tools/brouter/write_build_evidence.py" "${evidence_arguments[@]}" --output "$ARTIFACT_DIR/build-evidence.json"
 
 echo "TASK 154 unsigned artifacts: $ARTIFACT_DIR"
