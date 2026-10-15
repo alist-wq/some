@@ -1,0 +1,20 @@
+name: Destination-index distribution contract
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/destination-index-release.yml'
+      - '.github/workflows/destination-index-contract.yml'
+      - 'tools/destination-index/**'
+
+permissions:
+  contents: read
+
+jobs:
+  contract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Verify destination-index build and distribution policy
+        run: python3 -m unittest discover -s tools/destination-index/tests -p 'test_*.py' -v
+
