@@ -22,6 +22,14 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
+      - name: Verify distribution lane and protected acceptance key
+        env:
+          PACKAGE_VERSION: ${{ inputs.package_version }}
+          ACCEPTANCE_ONLY: ${{ inputs.acceptance_only }}
+          RENAV_ACCEPTANCE_ARTIFACT_KEY: ${{ secrets.RENAV_ACCEPTANCE_ARTIFACT_KEY }}
+        run: python3 tools/destination-index/validate_distribution.py
+      - name: Test destination-index distribution policy
+        run: python3 -m unittest discover -s tools/destination-index/tests -p 'test_*.py'
       - name: Install ephemeral PBF reader
         run: python3 -m pip install --disable-pip-version-check osmium==3.7.0
       - name: Fetch and verify locked source
@@ -41,7 +49,6 @@ jobs:
         if: ${{ inputs.acceptance_only }}
         run: |
           set -euo pipefail
-          case "${{ inputs.package_version }}" in acceptance-*) ;; *) echo 'Acceptance version must use acceptance- prefix' >&2; exit 1;; esac
           python3 tools/destination-index/build_acceptance_variant.py --input one/destination-index.jsonl --output one/acceptance-index.jsonl
           python3 tools/destination-index/build_acceptance_variant.py --input two/destination-index.jsonl --output two/acceptance-index.jsonl
           cmp one/acceptance-index.jsonl two/acceptance-index.jsonl
@@ -49,7 +56,9 @@ jobs:
           mv one/acceptance-index.jsonl one/destination-index.jsonl
           mv two/acceptance-index.jsonl two/destination-index.jsonl
       - name: Create canonical manifest
-        run: python3 tools/destination-index/write_manifest.py --index one/destination-index.jsonl --lock tools/brouter/locked-inputs/ua-kharkiv-pedestrian.env --package-version "${{ inputs.package_version }}" --output one/manifest.json
+        env:
+          PACKAGE_VERSION: ${{ inputs.package_version }}
+        run: python3 tools/destination-index/write_manifest.py --index one/destination-index.jsonl --lock tools/brouter/locked-inputs/ua-kharkiv-pedestrian.env --package-version "$PACKAGE_VERSION" --output one/manifest.json
       - name: Sign and verify release evidence
         env:
           RENAV_DESTINATION_INDEX_ED25519_PRIVATE_KEY: ${{ secrets.RENAV_DESTINATION_INDEX_ED25519_PRIVATE_KEY }}
@@ -68,9 +77,10 @@ jobs:
         if: ${{ !inputs.acceptance_only }}
         env:
           GH_TOKEN: ${{ github.token }}
+          PACKAGE_VERSION: ${{ inputs.package_version }}
         run: |
           set -euo pipefail
-          tag="destination-index-ua-kharkiv-pedestrian-${{ inputs.package_version }}"
+          tag="destination-index-ua-kharkiv-pedestrian-${PACKAGE_VERSION}"
           ! gh release view "$tag" >/dev/null 2>&1
       - name: Publish immutable assets to R2
         if: ${{ !inputs.acceptance_only }}
@@ -81,13 +91,14 @@ jobs:
           R2_S3_ENDPOINT: ${{ secrets.RENAV_R2_S3_ENDPOINT }}
           R2_BUCKET: renav-public-releases
           R2_PUBLIC_BASE_URL: https://downloads.renav.me
+          PACKAGE_VERSION: ${{ inputs.package_version }}
         run: |
           set -euo pipefail
           command -v aws >/dev/null
           test -n "$AWS_ACCESS_KEY_ID"
           test -n "$AWS_SECRET_ACCESS_KEY"
           test -n "$R2_S3_ENDPOINT"
-          prefix="renav/destination-index/ua-kharkiv-pedestrian/${{ inputs.package_version }}"
+          prefix="renav/destination-index/ua-kharkiv-pedestrian/${PACKAGE_VERSION}"
           for asset in destination-index.jsonl manifest.json manifest.json.sig renav-destination-index-ed25519.pub; do
             key="$prefix/$asset"
             ! aws s3api head-object --bucket "$R2_BUCKET" --key "$key" --endpoint-url "$R2_S3_ENDPOINT" >/dev/null 2>&1
@@ -99,20 +110,28 @@ jobs:
         if: ${{ !inputs.acceptance_only }}
         env:
           GH_TOKEN: ${{ github.token }}
+          PACKAGE_VERSION: ${{ inputs.package_version }}
         run: |
           set -euo pipefail
-          tag="destination-index-ua-kharkiv-pedestrian-${{ inputs.package_version }}"
-          gh release create "$tag" one/destination-index.jsonl one/manifest.json one/manifest.json.sig one/renav-destination-index-ed25519.pub --title "RENAV Kharkiv destination index ${{ inputs.package_version }}" --notes "Signed offline destination index. © OpenStreetMap contributors, ODbL 1.0."
-      - name: Keep acceptance package private to this workflow run
+          tag="destination-index-ua-kharkiv-pedestrian-${PACKAGE_VERSION}"
+          gh release create "$tag" one/destination-index.jsonl one/manifest.json one/manifest.json.sig one/renav-destination-index-ed25519.pub --title "RENAV Kharkiv destination index $PACKAGE_VERSION" --notes "Signed offline destination index. © OpenStreetMap contributors, ODbL 1.0."
+      - name: Encrypt acceptance package for the approved consumer
+        if: ${{ inputs.acceptance_only }}
+        env:
+          RENAV_ACCEPTANCE_ARTIFACT_KEY: ${{ secrets.RENAV_ACCEPTANCE_ARTIFACT_KEY }}
+        run: |
+          set -euo pipefail
+          tar -cf acceptance-package.tar -C one destination-index.jsonl manifest.json manifest.json.sig renav-destination-index-ed25519.pub
+          openssl enc -aes-256-cbc -salt -pbkdf2 -iter 600000 -in acceptance-package.tar -out one/acceptance-package.tar.enc -pass env:RENAV_ACCEPTANCE_ARTIFACT_KEY
+          rm acceptance-package.tar
+          test "$(head -c 8 one/acceptance-package.tar.enc)" = "Salted__"
+          sha256sum one/acceptance-package.tar.enc
+      - name: Upload encrypted acceptance package only
         if: ${{ inputs.acceptance_only }}
         uses: actions/upload-artifact@v4
         with:
           name: destination-index-${{ inputs.package_version }}
-          path: |
-            one/destination-index.jsonl
-            one/manifest.json
-            one/manifest.json.sig
-            one/renav-destination-index-ed25519.pub
+          path: one/acceptance-package.tar.enc
           retention-days: 7
           if-no-files-found: error
 
