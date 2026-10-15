@@ -121,10 +121,7 @@ jobs:
           RENAV_ACCEPTANCE_ARTIFACT_KEY: ${{ secrets.RENAV_ACCEPTANCE_ARTIFACT_KEY }}
         run: |
           set -euo pipefail
-          tar -cf acceptance-package.tar -C one destination-index.jsonl manifest.json manifest.json.sig renav-destination-index-ed25519.pub
-          openssl enc -aes-256-cbc -salt -pbkdf2 -iter 600000 -in acceptance-package.tar -out one/acceptance-package.tar.enc -pass env:RENAV_ACCEPTANCE_ARTIFACT_KEY
-          rm acceptance-package.tar
-          test "$(head -c 8 one/acceptance-package.tar.enc)" = "Salted__"
+          bash tools/destination-index/encrypt_acceptance_package.sh one one/acceptance-package.tar.enc
           sha256sum one/acceptance-package.tar.enc
       - name: Upload encrypted acceptance package only
         if: ${{ inputs.acceptance_only }}
