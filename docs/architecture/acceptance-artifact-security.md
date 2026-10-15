@@ -37,3 +37,9 @@ authorized post-merge acceptance dispatch is needed to prove the encrypted
 artifact can be decrypted and verified by the intended operator; local/PR
 contract tests alone are not that end-to-end proof.
 
+PR #1 commit `a959661eabab156977b8a47353b180f86d1f155d` passed the
+read-only [distribution-contract run 38732503449](https://github.com/alist-wq/some/actions/runs/38732503449):
+11 tests, 0 failures, 0 skips. This verifies the code policy, not protected
+signing, key enrollment, or Android replacement acceptance. Those remain
+pending; RB-02 and RB-05.2 are IN PROGRESS and Gate B remains OPEN.
+
