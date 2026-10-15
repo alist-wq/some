@@ -6,6 +6,7 @@ on:
       - '.github/workflows/destination-index-release.yml'
       - '.github/workflows/destination-index-contract.yml'
       - 'tools/destination-index/**'
+      - 'docs/architecture/acceptance-artifact-security.md'
 
 permissions:
   contents: read
