@@ -1,0 +1,31 @@
+name: RENAV protected acceptance-key probe
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    if: ${{ github.repository == 'alist-wq/some' && github.ref == 'refs/heads/main' }}
+    environment: destination-index-release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Encrypt and self-verify synthetic probe
+        env:
+          RENAV_ACCEPTANCE_ARTIFACT_KEY: ${{ secrets.RENAV_ACCEPTANCE_ARTIFACT_KEY }}
+        run: |
+          set -euo pipefail
+          python3 tools/destination-index/acceptance_key_probe.py create probe-output
+          python3 tools/destination-index/acceptance_key_probe.py verify probe-output
+      - name: Upload encrypted probe only
+        uses: actions/upload-artifact@v4
+        with:
+          name: renav-acceptance-key-probe-${{ github.run_id }}
+          path: |
+            probe-output/probe.enc
+            probe-output/probe.mac
+          retention-days: 1
+          if-no-files-found: error

@@ -1,0 +1,20 @@
+name: RENAV acceptance-key probe contract
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/acceptance-key-probe.yml'
+      - '.github/workflows/acceptance-key-probe-contract.yml'
+      - 'tools/destination-index/acceptance_key_probe.py'
+      - 'tools/destination-index/tests/test_acceptance_key_probe.py'
+
+permissions:
+  contents: read
+
+jobs:
+  contract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Test synthetic probe without protected secrets
+        run: python3 -m unittest discover -s tools/destination-index/tests -p 'test_acceptance_key_probe.py' -v
