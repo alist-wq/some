@@ -7,6 +7,11 @@ on:
         description: Immutable destination-index package version
         required: true
         type: string
+      acceptance_only:
+        description: Sign a distinct test payload but do not publish a release or public download
+        required: true
+        default: false
+        type: boolean
 
 permissions:
   contents: write
@@ -32,6 +37,17 @@ jobs:
           python3 tools/destination-index/build_destination_index.py --input ukraine.osm.pbf --output one/destination-index.jsonl
           python3 tools/destination-index/build_destination_index.py --input ukraine.osm.pbf --output two/destination-index.jsonl
           cmp one/destination-index.jsonl two/destination-index.jsonl
+      - name: Make a deterministic non-production payload variant
+        if: ${{ inputs.acceptance_only }}
+        run: |
+          set -euo pipefail
+          case "${{ inputs.package_version }}" in acceptance-*) ;; *) echo 'Acceptance version must use acceptance- prefix' >&2; exit 1;; esac
+          python3 tools/destination-index/build_acceptance_variant.py --input one/destination-index.jsonl --output one/acceptance-index.jsonl
+          python3 tools/destination-index/build_acceptance_variant.py --input two/destination-index.jsonl --output two/acceptance-index.jsonl
+          cmp one/acceptance-index.jsonl two/acceptance-index.jsonl
+          test "$(sha256sum one/destination-index.jsonl | cut -d' ' -f1)" != "$(sha256sum one/acceptance-index.jsonl | cut -d' ' -f1)"
+          mv one/acceptance-index.jsonl one/destination-index.jsonl
+          mv two/acceptance-index.jsonl two/destination-index.jsonl
       - name: Create canonical manifest
         run: python3 tools/destination-index/write_manifest.py --index one/destination-index.jsonl --lock tools/brouter/locked-inputs/ua-kharkiv-pedestrian.env --package-version "${{ inputs.package_version }}" --output one/manifest.json
       - name: Sign and verify release evidence
@@ -49,6 +65,7 @@ jobs:
           printf 'renav-destination-index %s\n' "$(cat one/renav-destination-index-ed25519.pub)" > one/allowed-signers
           ssh-keygen -Y verify -f one/allowed-signers -I renav-destination-index -n renav-destination-index-manifest -s one/manifest.json.sig < one/manifest.json
       - name: Refuse an existing immutable version
+        if: ${{ !inputs.acceptance_only }}
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -56,6 +73,7 @@ jobs:
           tag="destination-index-ua-kharkiv-pedestrian-${{ inputs.package_version }}"
           ! gh release view "$tag" >/dev/null 2>&1
       - name: Publish immutable assets to R2
+        if: ${{ !inputs.acceptance_only }}
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.RENAV_R2_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.RENAV_R2_SECRET_ACCESS_KEY }}
@@ -78,9 +96,23 @@ jobs:
             cmp "one/$asset" "published-$asset"
           done
       - name: Publish immutable assets
+        if: ${{ !inputs.acceptance_only }}
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           tag="destination-index-ua-kharkiv-pedestrian-${{ inputs.package_version }}"
           gh release create "$tag" one/destination-index.jsonl one/manifest.json one/manifest.json.sig one/renav-destination-index-ed25519.pub --title "RENAV Kharkiv destination index ${{ inputs.package_version }}" --notes "Signed offline destination index. © OpenStreetMap contributors, ODbL 1.0."
+      - name: Keep acceptance package private to this workflow run
+        if: ${{ inputs.acceptance_only }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: destination-index-${{ inputs.package_version }}
+          path: |
+            one/destination-index.jsonl
+            one/manifest.json
+            one/manifest.json.sig
+            one/renav-destination-index-ed25519.pub
+          retention-days: 7
+          if-no-files-found: error
+
