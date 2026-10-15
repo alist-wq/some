@@ -12,4 +12,3 @@ tar -cf "$archive" -C "$input_dir" \
 openssl enc -aes-256-cbc -salt -pbkdf2 -iter 600000 \
   -in "$archive" -out "$encrypted_output" -pass env:RENAV_ACCEPTANCE_ARTIFACT_KEY
 test "$(head -c 8 "$encrypted_output")" = "Salted__"
-
