@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>RENAV navigation-first redesign · design prototype</title>
+  <link rel="stylesheet" href="tokens.css">
+</head>
+<body>
+  <div class="workbench">
+    <aside class="controls" aria-label="Design review controls">
+      <h1>RENAV design review</h1>
+      <p>Interactive proposal, not the Android app. Map images are preserved historical captures; no live position or route is shown.</p>
+      <label for="state">Screen/state</label>
+      <select id="state"></select>
+      <label for="language">Language</label>
+      <select id="language"><option value="en">English</option><option value="uk">Українська</option></select>
+      <label for="scale">Text scale</label>
+      <select id="scale"><option value="1">100%</option><option value="1.5">150%</option><option value="2">200%</option></select>
+      <label for="theme">Theme</label>
+      <select id="theme"><option value="light">Light</option><option value="dark">Dark</option></select>
+      <p class="footnote">Prototype actions navigate between proposed states only. They do not save, route, request location, or send data.</p>
+    </aside>
+    <div class="preview"><p id="prototypeBadge" class="prototype-badge" role="note"></p><div class="stage"><div id="app" class="app" data-theme="light"></div></div></div>
+  </div>
+  <script src="prototype.js"></script>
+</body>
+</html>
