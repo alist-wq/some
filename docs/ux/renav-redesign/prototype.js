@@ -67,6 +67,9 @@ const copy = {
     savedExample:'Example report · navigation reliability',delete:'Delete report',
     offline:'Offline',position:'Position',manualLabel:'Manual start',confidence:'Confidence',
     route:'Route',selected:'Selected destination',noReady:'Not ready',noProgress:'Progress paused',
+    reviewTitle:'RENAV design review',reviewIntro:'Interactive proposal, not the Android app. Map images are historical; no live position or route is shown.',
+    reviewState:'Screen/state',reviewLanguage:'Language',reviewScale:'Text scale',reviewTheme:'Theme',reviewLight:'Light',reviewDark:'Dark',
+    reviewFootnote:'Prototype actions show proposed states only. They do not save, route, request location, or send data.',
     returnMap:'Return to map',unverified:'Design state only — not a live positioning claim',
     prototypeBadge:'Simulated design · historical map image, not live navigation'
   },
@@ -130,12 +133,17 @@ const copy = {
     savedExample:'Приклад звіту · надійність навігації',delete:'Видалити звіт',
     offline:'Офлайн',position:'Позиція',manualLabel:'Ручний початок',confidence:'Впевненість',
     route:'Маршрут',selected:'Вибраний пункт',noReady:'Не готово',noProgress:'Прогрес призупинено',
+    reviewTitle:'Перегляд дизайну RENAV',reviewIntro:'Інтерактивний макет, не застосунок Android. Зображення мапи історичні; поточне місцеположення й маршрут не показано.',
+    reviewState:'Екран або стан',reviewLanguage:'Мова',reviewScale:'Масштаб тексту',reviewTheme:'Тема',reviewLight:'Світла',reviewDark:'Темна',
+    reviewFootnote:'Дії макета показують лише запропоновані стани. Вони не зберігають дані, не прокладають маршрути, не запитують геодані й нічого не надсилають.',
     returnMap:'Повернутися до мапи',unverified:'Лише дизайн-стан — не поточні дані про позицію',
     prototypeBadge:'Дизайн-макет · історичне зображення мапи, не поточна навігація'
   }
 };
 const app = document.getElementById('app');
 const prototypeBadge = document.getElementById('prototypeBadge');
+const reviewControls = document.getElementById('reviewControls');
+const selectedStateName = document.getElementById('selectedStateName');
 const stateSelect = document.getElementById('state');
 const languageSelect = document.getElementById('language');
 const scaleSelect = document.getElementById('scale');
@@ -215,13 +223,25 @@ function resolveUserTransition(from, requested) {
 
 function render() {
   t = copy[language];
+  reviewControls.ariaLabel = t.reviewTitle;
+  for (const [id,key] of [['reviewTitle','reviewTitle'],['reviewIntro','reviewIntro'],['stateLabel','reviewState'],['languageLabel','reviewLanguage'],['scaleLabel','reviewScale'],['themeLabel','reviewTheme'],['reviewFootnote','reviewFootnote']]) {
+    document.getElementById(id).textContent = t[key];
+  }
+  if (themeSelect.options?.length === 2) {
+    themeSelect.options[0].textContent = t.reviewLight;
+    themeSelect.options[1].textContent = t.reviewDark;
+  }
   prototypeBadge.textContent = t.prototypeBadge;
   document.documentElement.lang = language;
   document.documentElement.dataset.theme = theme;
   app.dataset.theme = theme;
+  app.dataset.scale = scale;
+  app.dataset.screen = state;
   app.style.setProperty('--scale',scale);
   stateSelect.innerHTML = screens.map(s=>`<option value="${s}">${t[s]}</option>`).join('');
   stateSelect.value = state;
+  stateSelect.title = t[state];
+  selectedStateName.textContent = t[state];
   languageSelect.value = language; scaleSelect.value = scale; themeSelect.value = theme;
   const full = ['menu','advanced','incident','savedReports','incidentDelete','incidentFailure'].includes(state);
   const offlineReady = !offlineNotReadyStates.includes(state);

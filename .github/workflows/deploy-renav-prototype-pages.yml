@@ -31,10 +31,28 @@ jobs:
         uses: actions/configure-pages@v5
         with:
           enablement: true
+      - name: Stage public prototype files only
+        shell: bash
+        run: |
+          set -euo pipefail
+          source_dir=docs/ux/renav-redesign
+          public_dir="$RUNNER_TEMP/renav-prototype-public"
+          mkdir -p "$public_dir"
+          files=(index.html tokens.css prototype.js historical-map-backdrop.png historical-route-backdrop.png)
+          for file in "${files[@]}"; do
+            test -f "$source_dir/$file"
+            test ! -L "$source_dir/$file"
+            cp -- "$source_dir/$file" "$public_dir/$file"
+          done
+          printf '%s  %s\n' \
+            E6AAF8C169272B3E7EDEE303370F29FD49F8191E159D837E5F77CECF4D9B7139 "$public_dir/historical-map-backdrop.png" \
+            EBD8F1D208A54EF1F71F4D25AE77C193C0E09D9DE8D0C445BA64EDF40CD3ED52 "$public_dir/historical-route-backdrop.png" \
+            | sha256sum --check --status
+          test "$(find "$public_dir" -maxdepth 1 -type f | wc -l)" -eq 5
       - name: Package prototype
         uses: actions/upload-pages-artifact@v3
         with:
-          path: docs/ux/renav-redesign
+          path: ${{ runner.temp }}/renav-prototype-public
       - name: Deploy Pages
         id: deployment
         uses: actions/deploy-pages@v4
